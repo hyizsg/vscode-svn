@@ -15,6 +15,17 @@ fi
 # 任意命令失败立即退出
 set -e
 
+# 确保依赖已安装（vsce 打包前会调用 vscode:prepublish -> tsc，必须有 node_modules）
+if [ ! -d "node_modules" ] || [ ! -x "node_modules/.bin/tsc" ]; then
+    echo "未检测到 node_modules（或缺少 typescript），正在执行 npm install..."
+    if command -v npm >/dev/null 2>&1; then
+        npm install --no-audit --no-fund
+    else
+        echo "❌ 未检测到 npm，请先安装 Node.js 后重试。"
+        exit 1
+    fi
+fi
+
 # 解析可用的 vsce 调用方式
 # 1) 全局 vsce  2) npx @vscode/vsce  3) npx vsce（兼容旧名）
 resolve_vsce_cmd() {

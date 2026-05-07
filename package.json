@@ -444,9 +444,9 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "tsc -p ./ && npm run copy-templates",
+    "compile": "npx tsc -p ./ && npm run copy-templates",
     "copy-templates": "mkdir -p out/templates && cp -r src/templates/* out/templates/ && mkdir -p templates && cp -r src/templates/* templates/",
-    "watch": "tsc -watch -p ./",
+    "watch": "npx tsc -watch -p ./",
     "pretest": "npm run compile",
     "test": "node ./out/test/runTest.js",
     "package": "vsce package"
