@@ -179,10 +179,15 @@ export class AiService {
    • 模型ID: gpt-3.5-turbo 或 gpt-4
    • API密钥: sk-...（从OpenAI官网获取）
 
-🔹 通义千问
+🔹 通义千问（推荐使用兼容模式）
+   • API地址: https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions
+   • 模型ID: qwen-turbo / qwen-plus / qwen-max
+   • API密钥: sk-...（从阿里云百炼控制台获取）
+
+🔹 通义千问（原生接口，已自动适配）
    • API地址: https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation
    • 模型ID: qwen-turbo 或 qwen-plus
-   • API密钥: sk-...（从阿里云控制台获取）
+   • API密钥: sk-...
 
 🔹 文心一言
    • API地址: https://aip.baidubce.com/rpc/2.0/ai_custom/v1/wenxinworkshop/chat/completions
@@ -442,27 +447,72 @@ ${truncatedDiff}
    * @param config AI配置
    * @returns AI生成的回复
    */
+  /**
+   * 判断是否为 DashScope（阿里云通义千问）原生接口
+   * 原生接口路径形如：/api/v1/services/aigc/text-generation/generation
+   * 兼容模式接口（compatible-mode）使用标准 OpenAI 格式，不在此列
+   */
+  private isDashScopeNativeApi(apiUrl: string): boolean {
+    try {
+      const url = new URL(apiUrl);
+      const host = url.hostname.toLowerCase();
+      const pathname = url.pathname.toLowerCase();
+      const isDashScopeHost = host.endsWith('dashscope.aliyuncs.com') || host.endsWith('dashscope-intl.aliyuncs.com');
+      if (!isDashScopeHost) {
+        return false;
+      }
+      // compatible-mode 走标准 OpenAI 格式
+      if (pathname.includes('/compatible-mode/')) {
+        return false;
+      }
+      // 原生 aigc 接口（包括 text-generation、multimodal-generation 等）
+      return pathname.includes('/services/aigc/') || pathname.endsWith('/generation');
+    } catch {
+      return false;
+    }
+  }
+
   private callAiApi(prompt: string, config: { apiUrl: string; modelId: string; apiKey: string }): Promise<string> {
     return new Promise((resolve, reject) => {
-      // 构建请求数据 - 使用通用的OpenAI格式
-      const requestData = JSON.stringify({
-        model: config.modelId,
-        messages: [
-          {
-            role: 'system',
-            content: '你是一个专业的代码提交信息生成助手。请根据提供的代码差异生成简洁、准确的中文提交信息。'
-          },
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        temperature: 0.7,
-        max_tokens: 2000
-      });
-
-      // 解析URL
+      // 解析URL，根据接口类型选择请求体格式
       const url = new URL(config.apiUrl);
+      const isDashScopeNative = this.isDashScopeNativeApi(config.apiUrl);
+
+      // 系统消息 / 用户消息
+      const systemPrompt = '你是一个专业的代码提交信息生成助手。请根据提供的代码差异生成简洁、准确的中文提交信息。';
+
+      // 构建请求体：
+      // - DashScope 原生接口（/api/v1/services/aigc/text-generation/generation）使用 input.messages + parameters 格式
+      // - 其它（OpenAI 兼容、百炼 compatible-mode、文心、OpenAI、deepseek 等）使用 OpenAI Chat Completions 格式
+      let requestData: string;
+      if (isDashScopeNative) {
+        requestData = JSON.stringify({
+          model: config.modelId,
+          input: {
+            messages: [
+              { role: 'system', content: systemPrompt },
+              { role: 'user', content: prompt }
+            ]
+          },
+          parameters: {
+            temperature: 0.7,
+            max_tokens: 2000,
+            result_format: 'message'
+          }
+        });
+        this.outputChannel.appendLine('[callAiApi] 检测到 DashScope 原生接口，使用 input.messages 请求格式');
+      } else {
+        requestData = JSON.stringify({
+          model: config.modelId,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt }
+          ],
+          temperature: 0.7,
+          max_tokens: 2000
+        });
+      }
+
       const options = {
         hostname: url.hostname,
         port: url.port || (url.protocol === 'https:' ? 443 : 80),
@@ -491,14 +541,18 @@ ${truncatedDiff}
               // 尝试解析不同格式的响应
               let content = '';
               if (response.choices && response.choices[0] && response.choices[0].message) {
-                // OpenAI格式
-                content = response.choices[0].message.content.trim();
-              } else if (response.output && response.output.text) {
-                // 通义千问格式
+                // OpenAI Chat Completions 格式（OpenAI、百炼 compatible-mode、deepseek 等）
+                content = (response.choices[0].message.content || '').trim();
+              } else if (response.output && response.output.choices && response.output.choices[0] &&
+                         response.output.choices[0].message) {
+                // DashScope 原生接口 + result_format=message 格式
+                content = (response.output.choices[0].message.content || '').trim();
+              } else if (response.output && typeof response.output.text === 'string') {
+                // DashScope 原生接口 + 默认 text 格式
                 content = response.output.text.trim();
               } else if (response.result) {
-                // 其他可能的格式
-                content = response.result.trim();
+                // 其它可能的格式（如部分代理）
+                content = (typeof response.result === 'string' ? response.result : JSON.stringify(response.result)).trim();
               } else {
                 throw new Error('无法解析AI响应格式');
               }
