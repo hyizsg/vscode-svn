@@ -90,6 +90,27 @@
                     revertFile(filePath);
                 });
             }
+
+            // 双击文件项快速打开差异对比（issue #11）
+            // 排除 checkbox / 操作按钮 / 链接等交互元素，避免误触发
+            item.addEventListener('dblclick', (e) => {
+                const target = e.target;
+                if (target && target.closest && target.closest(
+                    '.file-checkbox, .diff-button, .side-by-side-button, .revert-button, button, a, input'
+                )) {
+                    return;
+                }
+                // 防止双击选中文本造成视觉干扰
+                if (window.getSelection) {
+                    const sel = window.getSelection();
+                    if (sel && sel.removeAllRanges) sel.removeAllRanges();
+                }
+                showDiff(filePath);
+            });
+
+            // 视觉提示：鼠标悬停时显示可双击
+            item.style.cursor = item.style.cursor || 'default';
+            item.title = item.title || '双击打开差异对比';
         });
     }
     

@@ -1,5 +1,23 @@
 # 更新日志
 
+## [4.10.1] - 2026-05-07
+
+### 🐛 Bug 修复
+
+- **修复通义千问 DashScope 原生接口报错（关闭 issue #13）**
+  - 错误信息：`Either "prompt" or "messages" must exist and cannot both be none`
+  - 原因：插件统一使用 OpenAI Chat Completions 格式，而 DashScope 原生 `/api/v1/services/aigc/text-generation/generation` 需要 `input.messages + parameters` 格式
+  - 现在自动检测 URL，DashScope 原生接口自动转换请求体并解析 `output.choices[0].message.content` / `output.text` 两种返回格式
+  - 配置说明同步更新，推荐用户使用百炼兼容模式接口 `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`
+
+### ✨ 体验优化
+
+- **文件夹提交面板支持双击打开差异对比（关闭 issue #11）**
+  - 原来需要先在左侧找到文件再把鼠标移到右侧按钮，文件多时操作不便
+  - 现在在文件项任意空白处双击即可直接打开差异对比
+  - 自动避开 checkbox、操作按钮等交互元素，避免误触
+  - 鼠标悬停提示"双击打开差异对比"
+
 ## [4.10.0] - 2026-05-07
 
 ### ✨ 新增 SVN 文件锁定/解锁功能（关闭 issue #14）
