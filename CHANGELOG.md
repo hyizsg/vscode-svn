@@ -1,5 +1,14 @@
 # 更新日志
 
+## [Unreleased]
+
+### 🛠 构建脚本与打包修复
+
+- 修复 `build.sh` 在未全局安装 `vsce` 时报 `vsce: command not found` 的问题
+- `build.sh` 现在会自动检测 `vsce`，未安装时回退到 `npx --yes @vscode/vsce`
+- 安装步骤同时兼容 `cursor` 与 `code` CLI，未检测到时仅打包不安装
+- `package.json` 将 `@vscode/vsce` 加入 `devDependencies`，新增 `npm run package` 命令，无需全局安装即可打包
+
 ## [4.9.2] - 2026-01-04
 
 ### 1 文件夹提交面板默认显示 missing（!）丢失文件
