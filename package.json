@@ -2,7 +2,7 @@
   "name": "vscode-svn-ai",
   "displayName": "VSCode SVN - AI智能版本控制",
   "description": "🚀 全平台SVN智能插件：基于原生命令行工具，支持Windows/macOS/Linux，内置AI提交日志生成，可视化差异对比，100%开源透明。无需TortoiseSVN，轻量级高性能！",
-  "version": "4.9.2",
+  "version": "4.10.0",
   "publisher": "pengfeiSummer",
   "icon": "resources/icon.png",
   "engines": {
@@ -30,6 +30,9 @@
       "onCommand:vscode-svn.showFilterInfo",
       "onCommand:vscode-svn.checkout",
       "onCommand:vscode-svn.scanAndResolveConflicts",
+      "onCommand:vscode-svn.lockFile",
+      "onCommand:vscode-svn.unlockFile",
+      "onCommand:vscode-svn.showLockInfo",
       "workspaceContains:.svn"
     ],
   "main": "./out/extension.js",
@@ -122,6 +125,18 @@
       {
         "command": "vscode-svn.scanAndResolveConflicts",
         "title": "SVN: 扫描并解决冲突"
+      },
+      {
+        "command": "vscode-svn.lockFile",
+        "title": "SVN: 锁定文件"
+      },
+      {
+        "command": "vscode-svn.unlockFile",
+        "title": "SVN: 解锁文件"
+      },
+      {
+        "command": "vscode-svn.showLockInfo",
+        "title": "SVN: 查看锁定信息"
       }
     ],
     "menus": {
@@ -185,6 +200,21 @@
           "command": "vscode-svn.scanAndResolveConflicts",
           "when": "explorerResourceIsFolder",
           "group": "2_svn"
+        },
+        {
+          "command": "vscode-svn.lockFile",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "2_svn@7"
+        },
+        {
+          "command": "vscode-svn.unlockFile",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "2_svn@8"
+        },
+        {
+          "command": "vscode-svn.showLockInfo",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "2_svn@8"
         }
       ],
       "editor/context": [
@@ -212,6 +242,21 @@
           "command": "vscode-svn.viewLog",
           "when": "resourceScheme == file",
           "group": "2_svn"
+        },
+        {
+          "command": "vscode-svn.lockFile",
+          "when": "resourceScheme == file",
+          "group": "2_svn@7"
+        },
+        {
+          "command": "vscode-svn.unlockFile",
+          "when": "resourceScheme == file",
+          "group": "2_svn@8"
+        },
+        {
+          "command": "vscode-svn.showLockInfo",
+          "when": "resourceScheme == file",
+          "group": "2_svn@9"
         }
       ],
       "commandPalette": [
