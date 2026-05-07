@@ -818,6 +818,218 @@ async function checkoutFromSvn(folderUri?: vscode.Uri): Promise<void> {
 }
 
 /**
+ * 锁定文件（svn lock）
+ * @param filePath 文件路径
+ */
+async function lockFile(filePath: string): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) {
+      vscode.window.showErrorMessage('未检测到SVN命令行工具，请确保已安装SVN并添加到系统PATH中');
+      return;
+    }
+
+    if (!await svnService.isInWorkingCopy(filePath)) {
+      const result = await vscode.window.showErrorMessage(
+        '该文件不在SVN工作副本中',
+        '设置SVN工作副本路径',
+        '取消'
+      );
+
+      if (result === '设置SVN工作副本路径') {
+        await setSvnWorkingCopyRoot();
+        if (!await svnService.isInWorkingCopy(filePath)) {
+          vscode.window.showErrorMessage('文件仍不在SVN工作副本中，请检查设置的路径是否正确');
+          return;
+        }
+      } else {
+        return;
+      }
+    }
+
+    // 检查文件状态：未版本控制的文件无法锁定
+    const status = await svnService.getFileStatus(filePath);
+    if (status === '未版本控制') {
+      vscode.window.showErrorMessage('文件尚未加入SVN版本控制，无法锁定');
+      return;
+    }
+
+    // 提示是否检查远程锁定状态（只读检测，不阻塞流程）
+    let alreadyLockedByOther = false;
+    try {
+      const lockInfo = await svnService.getLockInfo(filePath);
+      if (lockInfo.locked) {
+        alreadyLockedByOther = true;
+        const lockMsg = `文件当前已被锁定。\n锁定者: ${lockInfo.owner || '未知'}` +
+          (lockInfo.comment ? `\n备注: ${lockInfo.comment}` : '') +
+          (lockInfo.created ? `\n时间: ${lockInfo.created}` : '');
+        const choice = await vscode.window.showWarningMessage(
+          lockMsg,
+          { modal: true },
+          '强制锁定（夺取）',
+          '取消'
+        );
+        if (choice !== '强制锁定（夺取）') {
+          return;
+        }
+      }
+    } catch (error: any) {
+      // 远程检测失败不阻塞操作，仅提示
+      vscode.window.showWarningMessage(`无法检测远程锁定状态：${error.message}，将继续尝试锁定`);
+    }
+
+    // 询问锁定备注
+    const lockMessage = await vscode.window.showInputBox({
+      prompt: '请输入锁定备注（可选）',
+      placeHolder: '描述锁定该文件的原因，便于团队成员了解'
+    });
+
+    // 用户按 ESC 取消
+    if (lockMessage === undefined) {
+      return;
+    }
+
+    await svnService.lockFile(filePath, lockMessage, alreadyLockedByOther);
+    vscode.window.showInformationMessage(`文件已成功锁定: ${path.basename(filePath)}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`SVN锁定失败: ${error.message}`);
+  }
+}
+
+/**
+ * 解锁文件（svn unlock）
+ * @param filePath 文件路径
+ */
+async function unlockFile(filePath: string): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) {
+      vscode.window.showErrorMessage('未检测到SVN命令行工具，请确保已安装SVN并添加到系统PATH中');
+      return;
+    }
+
+    if (!await svnService.isInWorkingCopy(filePath)) {
+      const result = await vscode.window.showErrorMessage(
+        '该文件不在SVN工作副本中',
+        '设置SVN工作副本路径',
+        '取消'
+      );
+
+      if (result === '设置SVN工作副本路径') {
+        await setSvnWorkingCopyRoot();
+        if (!await svnService.isInWorkingCopy(filePath)) {
+          vscode.window.showErrorMessage('文件仍不在SVN工作副本中，请检查设置的路径是否正确');
+          return;
+        }
+      } else {
+        return;
+      }
+    }
+
+    // 检测锁定状态：判断是否需要强制解锁
+    let needForce = false;
+    try {
+      const lockInfo = await svnService.getLockInfo(filePath);
+      if (!lockInfo.locked) {
+        vscode.window.showInformationMessage('该文件当前未被锁定，无需解锁');
+        return;
+      }
+
+      // 如果锁的拥有者并非当前用户，提示是否强制解锁
+      if (lockInfo.isCurrentUser === false) {
+        const lockMsg = `该文件被其他用户锁定。\n锁定者: ${lockInfo.owner || '未知'}` +
+          (lockInfo.comment ? `\n备注: ${lockInfo.comment}` : '') +
+          (lockInfo.created ? `\n时间: ${lockInfo.created}` : '') +
+          '\n\n是否强制解除该锁？';
+        const choice = await vscode.window.showWarningMessage(
+          lockMsg,
+          { modal: true },
+          '强制解锁',
+          '取消'
+        );
+        if (choice !== '强制解锁') {
+          return;
+        }
+        needForce = true;
+      }
+    } catch (error: any) {
+      // 检测失败仅提示，不阻塞解锁尝试
+      vscode.window.showWarningMessage(`无法检测远程锁定状态：${error.message}，将继续尝试解锁`);
+    }
+
+    await svnService.unlockFile(filePath, needForce);
+    vscode.window.showInformationMessage(`文件已成功解锁: ${path.basename(filePath)}`);
+  } catch (error: any) {
+    // 当锁不属于当前用户时 svn 会报错，自动提示是否强制解锁
+    const msg: string = error?.message || '';
+    if (/locked by|is not locked|410|not locked in this working copy/i.test(msg)) {
+      const choice = await vscode.window.showWarningMessage(
+        `解锁失败：${msg}\n\n是否尝试强制解锁？`,
+        { modal: true },
+        '强制解锁',
+        '取消'
+      );
+      if (choice === '强制解锁') {
+        try {
+          await svnService.unlockFile(filePath, true);
+          vscode.window.showInformationMessage(`文件已成功强制解锁: ${path.basename(filePath)}`);
+          return;
+        } catch (err2: any) {
+          vscode.window.showErrorMessage(`SVN强制解锁失败: ${err2.message}`);
+          return;
+        }
+      }
+      return;
+    }
+    vscode.window.showErrorMessage(`SVN解锁失败: ${error.message}`);
+  }
+}
+
+/**
+ * 显示文件的锁定信息
+ * @param filePath 文件路径
+ */
+async function showLockInfo(filePath: string): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) {
+      vscode.window.showErrorMessage('未检测到SVN命令行工具，请确保已安装SVN并添加到系统PATH中');
+      return;
+    }
+
+    if (!await svnService.isInWorkingCopy(filePath)) {
+      vscode.window.showErrorMessage('该文件不在SVN工作副本中');
+      return;
+    }
+
+    const lockInfo = await svnService.getLockInfo(filePath);
+    if (!lockInfo.locked) {
+      vscode.window.showInformationMessage(`文件 "${path.basename(filePath)}" 当前未被锁定`);
+      return;
+    }
+
+    const detail = [
+      `文件: ${path.basename(filePath)}`,
+      `锁定者: ${lockInfo.owner || '未知'}`,
+      lockInfo.created ? `锁定时间: ${lockInfo.created}` : '',
+      lockInfo.comment ? `锁定备注: ${lockInfo.comment}` : '',
+      lockInfo.isCurrentUser !== undefined
+        ? `锁定者${lockInfo.isCurrentUser ? '是' : '不是'}当前用户`
+        : ''
+    ].filter(Boolean).join('\n');
+
+    const action = await vscode.window.showInformationMessage(
+      detail,
+      { modal: true },
+      '解锁此文件',
+      '关闭'
+    );
+    if (action === '解锁此文件') {
+      await unlockFile(filePath);
+    }
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`获取锁定信息失败: ${error.message}`);
+  }
+}
+
+/**
  * 扫描并解决冲突
  * @param folderUri 文件夹URI（可选）
  */
@@ -1146,6 +1358,60 @@ export function activate(context: vscode.ExtensionContext) {
   const scanAndResolveConflictsCommand = vscode.commands.registerCommand('vscode-svn.scanAndResolveConflicts', async (folderUri?: vscode.Uri) => {
     await scanAndResolveConflicts(folderUri);
   });
+
+  // 注册锁定文件命令
+  const lockFileCommand = vscode.commands.registerCommand('vscode-svn.lockFile', async (fileUri?: vscode.Uri) => {
+    if (!fileUri) {
+      const activeEditor = vscode.window.activeTextEditor;
+      if (activeEditor) {
+        fileUri = activeEditor.document.uri;
+      } else {
+        vscode.window.showErrorMessage('没有选择文件');
+        return;
+      }
+    }
+    if (fileUri.scheme !== 'file') {
+      vscode.window.showErrorMessage('只能锁定本地文件');
+      return;
+    }
+    await lockFile(fileUri.fsPath);
+  });
+
+  // 注册解锁文件命令
+  const unlockFileCommand = vscode.commands.registerCommand('vscode-svn.unlockFile', async (fileUri?: vscode.Uri) => {
+    if (!fileUri) {
+      const activeEditor = vscode.window.activeTextEditor;
+      if (activeEditor) {
+        fileUri = activeEditor.document.uri;
+      } else {
+        vscode.window.showErrorMessage('没有选择文件');
+        return;
+      }
+    }
+    if (fileUri.scheme !== 'file') {
+      vscode.window.showErrorMessage('只能解锁本地文件');
+      return;
+    }
+    await unlockFile(fileUri.fsPath);
+  });
+
+  // 注册查看锁定信息命令
+  const showLockInfoCommand = vscode.commands.registerCommand('vscode-svn.showLockInfo', async (fileUri?: vscode.Uri) => {
+    if (!fileUri) {
+      const activeEditor = vscode.window.activeTextEditor;
+      if (activeEditor) {
+        fileUri = activeEditor.document.uri;
+      } else {
+        vscode.window.showErrorMessage('没有选择文件');
+        return;
+      }
+    }
+    if (fileUri.scheme !== 'file') {
+      vscode.window.showErrorMessage('只能查看本地文件的锁定信息');
+      return;
+    }
+    await showLockInfo(fileUri.fsPath);
+  });
   
   context.subscriptions.push(
     uploadFileCommand,
@@ -1169,7 +1435,10 @@ export function activate(context: vscode.ExtensionContext) {
     checkoutCommand,
     manageCredentialsCommand,
     clearCredentialsCommand,
-    scanAndResolveConflictsCommand
+    scanAndResolveConflictsCommand,
+    lockFileCommand,
+    unlockFileCommand,
+    showLockInfoCommand
   );
 }
 

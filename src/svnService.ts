@@ -2118,4 +2118,154 @@ export class SvnService {
       throw error;
     }
   }
+
+  /**
+   * 锁定文件（svn lock）
+   * @param filePath 文件路径
+   * @param message 锁定备注（可选）
+   * @param force 是否强制锁定（夺取他人锁），默认 false
+   */
+  public async lockFile(filePath: string, message?: string, force: boolean = false): Promise<void> {
+    this.showOutputChannel('SVN锁定操作');
+    this.outputChannel.appendLine(`锁定文件: ${filePath}`);
+    if (message) {
+      this.outputChannel.appendLine(`锁定备注: ${message}`);
+    }
+    if (force) {
+      this.outputChannel.appendLine('已启用强制锁定（--force）');
+    }
+
+    try {
+      let fileName = path.basename(filePath);
+      // 处理文件名包含 @ 符号的情况（SVN 对等号路径有特殊解析规则）
+      const needsEscaping = fileName.includes('@');
+      if (needsEscaping) {
+        fileName = `${fileName}@`;
+      }
+
+      // 组装命令
+      const messageArg = message && message.trim().length > 0
+        ? ` -m "${message.replace(/"/g, '\\"')}"`
+        : '';
+      const forceArg = force ? ' --force' : '';
+      const command = `lock "${fileName}"${messageArg}${forceArg}`;
+
+      const result = await this.executeSvnCommand(command, path.dirname(filePath));
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== SVN锁定操作完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      this.outputChannel.appendLine('========== SVN锁定操作失败 ==========');
+      throw new Error(`锁定文件失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 解锁文件（svn unlock）
+   * @param filePath 文件路径
+   * @param force 是否强制解锁（解除他人锁），默认 false
+   */
+  public async unlockFile(filePath: string, force: boolean = false): Promise<void> {
+    this.showOutputChannel('SVN解锁操作');
+    this.outputChannel.appendLine(`解锁文件: ${filePath}`);
+    if (force) {
+      this.outputChannel.appendLine('已启用强制解锁（--force）');
+    }
+
+    try {
+      let fileName = path.basename(filePath);
+      const needsEscaping = fileName.includes('@');
+      if (needsEscaping) {
+        fileName = `${fileName}@`;
+      }
+
+      const forceArg = force ? ' --force' : '';
+      const command = `unlock "${fileName}"${forceArg}`;
+
+      const result = await this.executeSvnCommand(command, path.dirname(filePath));
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== SVN解锁操作完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      this.outputChannel.appendLine('========== SVN解锁操作失败 ==========');
+      throw new Error(`解锁文件失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 获取文件锁定信息
+   * 通过 svn info --xml 解析远程仓库中的锁信息
+   * @param filePath 文件路径
+   * @returns 锁定信息对象，未锁定时 locked 为 false
+   */
+  public async getLockInfo(filePath: string): Promise<{
+    locked: boolean;
+    owner?: string;
+    token?: string;
+    comment?: string;
+    created?: string;
+    isCurrentUser?: boolean;
+  }> {
+    try {
+      let cwd = path.dirname(filePath);
+      let fileName = path.basename(filePath);
+      const needsEscaping = fileName.includes('@');
+      if (needsEscaping) {
+        fileName = `${fileName}@`;
+      }
+
+      // 优先查询服务器上的锁状态（--show-item lock 在新版 svn 不一定可用，统一用 info --xml）
+      // 使用 -r HEAD 让信息来自远程，否则可能只显示本地工作副本的锁
+      let infoXml = '';
+      try {
+        infoXml = await this.executeSvnCommand(`info "${fileName}" -r HEAD --xml`, cwd, true);
+      } catch (error) {
+        // 远程查询失败时，回退到本地工作副本
+        this.outputChannel.appendLine(`[getLockInfo] 远程查询失败，回退到本地：${(error as Error).message}`);
+        infoXml = await this.executeSvnCommand(`info "${fileName}" --xml`, cwd, true);
+      }
+
+      // 解析 <lock> 节点
+      const lockBlockMatch = /<lock>([\s\S]*?)<\/lock>/.exec(infoXml);
+      if (!lockBlockMatch) {
+        return { locked: false };
+      }
+
+      const lockBlock = lockBlockMatch[1];
+      const ownerMatch = /<owner>([\s\S]*?)<\/owner>/.exec(lockBlock);
+      const tokenMatch = /<token>([\s\S]*?)<\/token>/.exec(lockBlock);
+      const commentMatch = /<comment>([\s\S]*?)<\/comment>/.exec(lockBlock);
+      const createdMatch = /<created>([\s\S]*?)<\/created>/.exec(lockBlock);
+
+      const owner = ownerMatch ? ownerMatch[1].trim() : undefined;
+
+      // 尝试推断当前用户是否为锁的拥有者：从 svn auth 中获取保存的用户名
+      let isCurrentUser: boolean | undefined = undefined;
+      try {
+        if (this.authService && owner) {
+          const repoUrl = await this.authService.getRepositoryRootUrl(cwd);
+          if (repoUrl) {
+            const cred = await this.authService.getCredential(repoUrl);
+            if (cred && cred.username) {
+              isCurrentUser = cred.username === owner;
+            }
+          }
+        }
+      } catch {
+        // 推断失败不影响主流程
+      }
+
+      return {
+        locked: true,
+        owner,
+        token: tokenMatch ? tokenMatch[1].trim() : undefined,
+        comment: commentMatch ? commentMatch[1].trim() : undefined,
+        created: createdMatch ? createdMatch[1].trim() : undefined,
+        isCurrentUser
+      };
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getLockInfo] 获取锁定信息失败: ${error.message}`);
+      throw new Error(`获取锁定信息失败: ${error.message}`);
+    }
+  }
 }
