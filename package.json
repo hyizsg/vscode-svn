@@ -2,7 +2,7 @@
   "name": "vscode-svn-ai",
   "displayName": "VSCode SVN - AI智能版本控制",
   "description": "🚀 全平台SVN智能插件：基于原生命令行工具，支持Windows/macOS/Linux，内置AI提交日志生成，可视化差异对比，100%开源透明。无需TortoiseSVN，轻量级高性能！",
-  "version": "4.10.1",
+  "version": "4.11.0",
   "publisher": "pengfeiSummer",
   "icon": "resources/icon.png",
   "engines": {
@@ -139,124 +139,102 @@
         "title": "SVN: 查看锁定信息"
       }
     ],
+    "submenus": [
+      {
+        "id": "vscode-svn.submenu",
+        "label": "SVN"
+      }
+    ],
     "menus": {
       "explorer/context": [
         {
-          "command": "vscode-svn.showLocalRevision",
-          "when": "resourceScheme == file",
-          "group": "2_svn@1"
-        },
-        {
-          "command": "vscode-svn.uploadFile",
-          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "submenu": "vscode-svn.submenu",
+          "when": "resourceScheme == file || explorerResourceIsFolder",
           "group": "2_svn"
-        },
-        {
-          "command": "vscode-svn.revertFile",
-          "when": "resourceScheme == file && !explorerResourceIsFolder",
-          "group": "2_svn"
-        },
-        {
-          "command": "vscode-svn.revertFolder",
-          "when": "explorerResourceIsFolder",
-          "group": "2_svn"
-        },
-        {
-          "command": "vscode-svn.uploadFolder",
-          "when": "explorerResourceIsFolder",
-          "group": "2_svn"
-        },
-        {
-          "command": "vscode-svn.commitFile",
-          "when": "resourceScheme == file && !explorerResourceIsFolder",
-          "group": "2_svn"
-        },
-        {
-          "command": "vscode-svn.updateFile",
-          "when": "resourceScheme == file && !explorerResourceIsFolder",
-          "group": "2_svn"
-        },
-        {
-          "command": "vscode-svn.updateDirectory",
-          "when": "explorerResourceIsFolder",
-          "group": "2_svn"
-        },
-        {
-          "command": "vscode-svn.viewLog",
-          "when": "resourceScheme == file",
-          "group": "2_svn"
-        },
-        {
-          "command": "vscode-svn.setSvnRoot",
-          "when": "explorerResourceIsFolder",
-          "group": "2_svn@9"
-        },
-        {
-          "command": "vscode-svn.checkout",
-          "when": "explorerResourceIsFolder || !resourceScheme",
-          "group": "2_svn@10"
-        },
-        {
-          "command": "vscode-svn.scanAndResolveConflicts",
-          "when": "explorerResourceIsFolder",
-          "group": "2_svn"
-        },
-        {
-          "command": "vscode-svn.lockFile",
-          "when": "resourceScheme == file && !explorerResourceIsFolder",
-          "group": "2_svn@7"
-        },
-        {
-          "command": "vscode-svn.unlockFile",
-          "when": "resourceScheme == file && !explorerResourceIsFolder",
-          "group": "2_svn@8"
-        },
-        {
-          "command": "vscode-svn.showLockInfo",
-          "when": "resourceScheme == file && !explorerResourceIsFolder",
-          "group": "2_svn@8"
         }
       ],
       "editor/context": [
         {
+          "submenu": "vscode-svn.submenu",
+          "when": "resourceScheme == file",
+          "group": "2_svn"
+        }
+      ],
+      "vscode-svn.submenu": [
+        {
           "command": "vscode-svn.showLocalRevision",
           "when": "resourceScheme == file",
-          "group": "2_svn@1"
+          "group": "1_info@1"
         },
         {
           "command": "vscode-svn.commitFile",
-          "when": "resourceScheme == file",
-          "group": "2_svn"
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "2_commit@1"
         },
         {
-          "command": "vscode-svn.revertFile",
-          "when": "resourceScheme == file",
-          "group": "2_svn"
+          "command": "vscode-svn.uploadFile",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "2_commit@2"
+        },
+        {
+          "command": "vscode-svn.uploadFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "2_commit@3"
         },
         {
           "command": "vscode-svn.updateFile",
-          "when": "resourceScheme == file",
-          "group": "2_svn"
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "3_update@1"
+        },
+        {
+          "command": "vscode-svn.updateDirectory",
+          "when": "explorerResourceIsFolder",
+          "group": "3_update@2"
+        },
+        {
+          "command": "vscode-svn.revertFile",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "4_revert@1"
+        },
+        {
+          "command": "vscode-svn.revertFolder",
+          "when": "explorerResourceIsFolder",
+          "group": "4_revert@2"
         },
         {
           "command": "vscode-svn.viewLog",
           "when": "resourceScheme == file",
-          "group": "2_svn"
+          "group": "5_log@1"
         },
         {
           "command": "vscode-svn.lockFile",
-          "when": "resourceScheme == file",
-          "group": "2_svn@7"
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "6_lock@1"
         },
         {
           "command": "vscode-svn.unlockFile",
-          "when": "resourceScheme == file",
-          "group": "2_svn@8"
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "6_lock@2"
         },
         {
           "command": "vscode-svn.showLockInfo",
-          "when": "resourceScheme == file",
-          "group": "2_svn@9"
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "6_lock@3"
+        },
+        {
+          "command": "vscode-svn.scanAndResolveConflicts",
+          "when": "explorerResourceIsFolder",
+          "group": "7_advanced@1"
+        },
+        {
+          "command": "vscode-svn.setSvnRoot",
+          "when": "explorerResourceIsFolder",
+          "group": "8_settings@1"
+        },
+        {
+          "command": "vscode-svn.checkout",
+          "when": "explorerResourceIsFolder || !resourceScheme",
+          "group": "8_settings@2"
         }
       ],
       "commandPalette": [

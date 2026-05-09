@@ -111,8 +111,9 @@ export class SvnFolderCommitPanel {
             this.outputChannel.appendLine(`[_updateFileStatuses] 文件夹路径: ${this.folderPath}`);
             
             // 使用原生格式获取状态
-            this.outputChannel.appendLine(`[_updateFileStatuses] 执行SVN status命令...`);
-            const statusResult = await this.svnService.executeSvnCommand('status', this.folderPath, false);
+            this.outputChannel.appendLine(`[_updateFileStatuses] 执行SVN status命令（忽略 svn:externals 外部链接）...`);
+            // 添加 --ignore-externals 屏蔽 svn:externals 引用的外部目录（issue #19）
+            const statusResult = await this.svnService.executeSvnCommand('status --ignore-externals', this.folderPath, false);
             console.log('SVN status result:', statusResult);
             this.outputChannel.appendLine(`[_updateFileStatuses] SVN status 原始输出长度: ${statusResult.length} 字符`);
             this.outputChannel.appendLine(`[_updateFileStatuses] SVN status 原始输出:\n${statusResult}`);
@@ -121,7 +122,19 @@ export class SvnFolderCommitPanel {
             const allFileStatuses = statusResult
                 .split('\n')
                 .map(line => line.trim())
-                .filter(line => line && !line.startsWith('>'))  // 过滤空行和树冲突的详细信息
+                .filter(line => {
+                    if (!line) return false;
+                    // 过滤树冲突的详细信息行
+                    if (line.startsWith('>')) return false;
+                    // 过滤 svn:externals 提示行（issue #19）
+                    // SVN 在进入外部链接目录时会输出：Performing status on external item at '...'
+                    if (line.startsWith('Performing status on external item')) return false;
+                    // 过滤外部链接占位行（状态字符为 'X'）以及第7列为 'X' 的外部链接定义行
+                    // SVN status 第7列（索引6）若为 X 表示该项是外部链接定义
+                    if (line[0] === 'X') return false;
+                    if (line.length > 6 && line[6] === 'X') return false;
+                    return true;
+                })
                 .map(line => {
                     // SVN status 输出格式：
                     // 第一列：文件状态 (M:修改, A:新增, D:删除, ?:未版本控制, C:冲突, !:丢失等)
