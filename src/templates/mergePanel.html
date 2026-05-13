@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SVN 分支合并</title>
+    <link rel="stylesheet" href="{{STYLE_URI}}">
+</head>
+<body>
+    <div class="merge-container">
+        <!-- 头部信息 -->
+        <div class="merge-header">
+            <h2>SVN 分支合并</h2>
+            <div class="repo-info">
+                <div class="info-row">
+                    <span class="info-label">仓库根:</span>
+                    <span class="info-value" id="repoRootUrl">{{REPO_ROOT_URL}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">当前分支:</span>
+                    <span class="info-value" id="workingCopyUrl">{{WORKING_COPY_URL}}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">工作目录:</span>
+                    <span class="info-value" id="folderPath">{{FOLDER_PATH}}</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- 源选择区 -->
+        <div class="merge-section source-section">
+            <h3>合并源</h3>
+            <div class="source-mode-toggle">
+                <label class="radio-label">
+                    <input type="radio" name="sourceMode" value="select" checked> 从列表选择
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="sourceMode" value="manual"> 手动输入 URL
+                </label>
+            </div>
+
+            <!-- 列表选择模式 -->
+            <div class="source-select-mode" id="selectMode">
+                <div class="branch-select-row">
+                    <select id="branchSelect" class="branch-select">
+                        <option value="">-- 加载中... --</option>
+                    </select>
+                    <button id="refreshBranches" class="btn btn-secondary" title="刷新分支列表">刷新</button>
+                </div>
+            </div>
+
+            <!-- 手动输入模式 -->
+            <div class="source-manual-mode" id="manualMode" style="display:none;">
+                <input type="text" id="manualUrl" class="text-input"
+                    placeholder="输入完整 SVN URL，如 svn://host/repo/tags/feature-x">
+            </div>
+        </div>
+
+        <!-- 版本选择区 -->
+        <div class="merge-section revision-section" id="revisionSection">
+            <h3>选择版本</h3>
+            <div class="revision-mode-toggle">
+                <label class="radio-label">
+                    <input type="radio" name="revisionMode" value="pick" checked> 手动选择版本
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="revisionMode" value="all"> 合并全部可用版本
+                </label>
+            </div>
+
+            <!-- 版本选择器（Cherry-pick 模式） -->
+            <div class="revision-picker" id="revisionPicker">
+                <!-- 过滤区 -->
+                <div class="revision-filter-bar">
+                    <input type="text" id="revisionFilterInput" class="text-input filter-input"
+                        placeholder="过滤：输入作者、日志关键词、版本号...">
+                    <label class="checkbox-label hide-merged-label">
+                        <input type="checkbox" id="hideMerged"> 隐藏已合并
+                    </label>
+                </div>
+                <!-- 版本列表 -->
+                <div class="revision-list-container">
+                    <div class="revision-list-header">
+                        <span class="rev-col-check"><input type="checkbox" id="revSelectAll" title="全选/取消全选"></span>
+                        <span class="rev-col-num">版本</span>
+                        <span class="rev-col-author">作者</span>
+                        <span class="rev-col-date">日期</span>
+                        <span class="rev-col-msg">日志</span>
+                    </div>
+                    <div id="revisionListBody" class="revision-list-body">
+                        <div class="revision-empty">请先选择合并源分支</div>
+                    </div>
+                </div>
+                <div class="revision-summary" id="revisionSummary"></div>
+            </div>
+        </div>
+
+        <!-- 操作区 -->
+        <div class="merge-section action-section">
+            <button id="dryRunBtn" class="btn btn-secondary">预览合并</button>
+            <button id="mergeBtn" class="btn btn-primary">执行合并</button>
+            <span id="mergeStatus" class="merge-status"></span>
+        </div>
+
+        <!-- 结果区 -->
+        <div class="merge-section result-section" id="resultSection" style="display:none;">
+            <h3>合并结果</h3>
+            <pre id="mergeOutput" class="merge-output"></pre>
+        </div>
+
+        <!-- 冲突区 -->
+        <div class="merge-section conflict-section" id="conflictSection" style="display:none;">
+            <h3>冲突文件 (<span id="conflictCount">0</span>)</h3>
+            <div id="conflictList" class="conflict-list"></div>
+            <div class="conflict-actions">
+                <button id="openCommitBtn" class="btn btn-primary" style="display:none;">
+                    前往提交面板
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{SCRIPT_URI}}"></script>
+</body>
+</html>

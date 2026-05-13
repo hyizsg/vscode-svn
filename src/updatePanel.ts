@@ -63,7 +63,7 @@ export class SvnUpdatePanel {
 
     // 如果已经有面板，则显示它
     if (SvnUpdatePanel.currentPanel) {
-      SvnUpdatePanel.currentPanel.panel.reveal(column);
+      SvnUpdatePanel.currentPanel.panel.reveal(undefined, true);
       return;
     }
 
@@ -78,6 +78,11 @@ export class SvnUpdatePanel {
         retainContextWhenHidden: true
       }
     );
+
+    // 将 webview 面板移到独立的悬浮窗口
+    setTimeout(() => {
+      vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow').then(undefined, () => { /* 老版本不支持，静默忽略 */ });
+    }, 100);
 
     SvnUpdatePanel.currentPanel = new SvnUpdatePanel(
       panel,
@@ -205,15 +210,20 @@ export class SvnUpdatePanel {
           font-size: var(--vscode-font-size);
           color: var(--vscode-foreground);
           background-color: var(--vscode-editor-background);
-          padding: 10px;
+          margin: 0;
+          padding: 10px 10px 16px 10px;
+          box-sizing: border-box;
+          height: 100vh;
+          overflow: hidden;
         }
         .container {
           display: flex;
           flex-direction: column;
-          height: 100vh;
+          height: 100%;
         }
         .output-container {
           flex: 1;
+          min-height: 0;
           padding: 10px;
           border: 1px solid var(--vscode-panel-border);
           background-color: var(--vscode-editor-background);
@@ -225,14 +235,23 @@ export class SvnUpdatePanel {
         .button-container {
           display: flex;
           justify-content: flex-end;
+          align-items: center;
+          gap: 10px;
+          flex-shrink: 0;
+          padding-bottom: 4px;
         }
         button {
           background-color: var(--vscode-button-background);
           color: var(--vscode-button-foreground);
           border: none;
           padding: 8px 12px;
-          margin-left: 10px;
+          min-width: 96px;
+          height: 32px;
+          box-sizing: border-box;
           cursor: pointer;
+          font-size: inherit;
+          line-height: 1;
+          border-radius: 2px;
         }
         button:hover {
           background-color: var(--vscode-button-hoverBackground);
@@ -248,10 +267,6 @@ export class SvnUpdatePanel {
         .file-info {
           margin-bottom: 10px;
           color: var(--vscode-descriptionForeground);
-        }
-        .update-button {
-          margin-top: 10px;
-          margin-bottom: 10px;
         }
       </style>
     </head>

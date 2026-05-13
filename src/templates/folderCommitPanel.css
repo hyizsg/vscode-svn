@@ -36,6 +36,48 @@ body {
     color: var(--vscode-inputValidation-warningForeground);
 }
 
+/* Unversioned 文件删除按钮：与 .revert-button 样式一致 */
+.delete-button {
+    background-color: var(--vscode-errorForeground) !important;
+    opacity: 0.8;
+}
+
+.delete-button:hover {
+    opacity: 1;
+}
+
+.batch-delete-button {
+    margin-left: 8px;
+    padding: 2px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+    background-color: var(--vscode-errorForeground) !important;
+    color: var(--vscode-button-foreground, #fff);
+    border: 1px solid transparent;
+    border-radius: 2px;
+    cursor: pointer;
+    opacity: 0.8;
+}
+
+.batch-delete-button:hover {
+    opacity: 1;
+}
+
+/* 拖拽高亮 */
+.file-item.dragging {
+    opacity: 0.5;
+}
+
+.changelist-group.drag-over > .changelist-header {
+    background-color: var(--vscode-list-dropBackground, rgba(38, 79, 120, 0.35));
+    outline: 1px dashed var(--vscode-focusBorder, #007acc);
+}
+
+.changelist-group.drag-forbidden > .changelist-header {
+    outline: 1px dashed var(--vscode-errorForeground, #f48771);
+    cursor: not-allowed;
+}
+
 .file-list-container {
     flex: 1;
     overflow: auto;
@@ -65,7 +107,9 @@ body {
 .file-item { 
     display: grid;
     grid-template-columns: 30px minmax(150px, 2fr) minmax(200px, 3fr) 100px 180px;
-    padding: 4px 8px;
+    /* 左 padding 让子级 checkbox 与父级 header 的 icon 左边缘对齐：
+       header 布局 = 8(padding) + 12(toggle) + 8(gap) + 14(checkbox) + 8(gap) = 50px */
+    padding: 4px 8px 4px 50px;
     cursor: pointer;
     align-items: center;
     border-bottom: 1px solid var(--vscode-panel-border);
@@ -154,42 +198,24 @@ body {
     padding: 4px 12px;
 }
 
-.prefix-section {
-    margin-bottom: 10px;
-}
-
-.prefix-container {
+.button-container {
     display: flex;
-    gap: 5px;
-    margin-bottom: 10px;
+    align-items: center;
+    gap: 6px;
 }
 
-.prefix-input {
-    flex: 1;
-    background-color: var(--vscode-input-background);
-    color: var(--vscode-input-foreground);
-    border: 1px solid var(--vscode-input-border);
-    padding: 4px;
-}
-
-#prefixSelect {
-    flex: 1;
+.history-select {
     background-color: var(--vscode-dropdown-background);
     color: var(--vscode-dropdown-foreground);
     border: 1px solid var(--vscode-dropdown-border);
-    padding: 4px;
-}
-
-#applyPrefixButton {
-    background-color: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    border: none;
     padding: 4px 8px;
-    cursor: pointer;
+    max-width: 250px;
 }
 
-#applyPrefixButton:hover {
-    background-color: var(--vscode-button-hoverBackground);
+#submitButton {
+    margin-left: auto;
+    min-width: 100px;
+    padding: 6px 16px;
 }
 
 button {
@@ -231,11 +257,11 @@ textarea {
     box-sizing: border-box;
 }
 
-.extension-filter {
+.group-filter {
     margin-top: 10px;
 }
 
-.extension-filter-label {
+.group-filter-label {
     display: block;
     margin-bottom: 8px;
     font-size: 12px;
@@ -243,7 +269,7 @@ textarea {
     font-weight: 500;
 }
 
-.extension-tags-container {
+.group-tags-container {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
@@ -255,7 +281,7 @@ textarea {
     background-color: var(--vscode-input-background);
 }
 
-.extension-tag {
+.group-tag {
     display: inline-flex;
     align-items: center;
     padding: 4px 8px;
@@ -270,31 +296,41 @@ textarea {
     color: var(--vscode-button-secondaryForeground);
 }
 
-.extension-tag:hover {
+.group-tag:hover {
     background-color: var(--vscode-button-secondaryHoverBackground);
     transform: translateY(-1px);
 }
 
-.extension-tag.selected {
+.group-tag.selected {
     background-color: var(--vscode-button-background);
     color: var(--vscode-button-foreground);
     border-color: var(--vscode-focusBorder);
     box-shadow: 0 0 0 1px var(--vscode-focusBorder);
 }
 
-.extension-tag .file-count {
+.group-tag .file-count {
     margin-left: 4px;
     opacity: 0.7;
     font-size: 10px;
 }
 
-.extension-actions {
+.group-tag.extension-tag {
+    background-color: var(--vscode-editorWidget-background);
+    border-style: dashed;
+}
+
+.group-tag.extension-tag.selected {
+    background-color: var(--vscode-button-background);
+    border-style: solid;
+}
+
+.group-actions {
     display: flex;
     gap: 6px;
     justify-content: flex-end;
 }
 
-.extension-action-btn {
+.group-action-btn {
     padding: 2px 8px;
     font-size: 11px;
     border-radius: 3px;
@@ -305,11 +341,149 @@ textarea {
     transition: background-color 0.2s ease;
 }
 
-.extension-action-btn:hover {
+.group-action-btn:hover {
     background-color: var(--vscode-button-secondaryHoverBackground);
 }
 
-/* 保持向后兼容，隐藏旧的select元素 */
+/* Changelist 分组样式 */
+.changelist-group {
+    margin-bottom: 4px;
+}
+
+/* Changes 分组始终显示（作为拖拽目标），覆盖 JS inline display:none */
+.changelist-group.group-changes {
+    display: block !important;
+}
+
+/* 行选择高亮（不影响提交勾选） */
+.file-item.active {
+    background-color: var(--vscode-list-activeSelectionBackground, rgba(38, 79, 120, 0.6)) !important;
+    color: var(--vscode-list-activeSelectionForeground, inherit);
+}
+
+/* 右键上下文菜单 */
+.context-menu {
+    position: fixed;
+    z-index: 9999;
+    min-width: 140px;
+    background-color: var(--vscode-menu-background, #2d2d30);
+    color: var(--vscode-menu-foreground, #cccccc);
+    border: 1px solid var(--vscode-menu-border, #454545);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    padding: 4px 0;
+    font-size: 13px;
+    border-radius: 3px;
+    user-select: none;
+}
+.context-menu-item {
+    padding: 4px 14px;
+    cursor: pointer;
+    line-height: 20px;
+    white-space: nowrap;
+}
+.context-menu-item:hover:not(.disabled) {
+    background-color: var(--vscode-menu-selectionBackground, #094771);
+    color: var(--vscode-menu-selectionForeground, #ffffff);
+}
+.context-menu-item.disabled {
+    color: var(--vscode-disabledForeground, #888);
+    cursor: default;
+    opacity: 0.6;
+}
+.context-menu-separator {
+    height: 1px;
+    margin: 4px 6px;
+    background-color: var(--vscode-menu-separatorBackground, #454545);
+}
+
+/* changelist header 删除按钮（复用 .delete-button 样式，靠右对齐，宽度与文件删除按钮一致） */
+.changelist-delete {
+    margin-left: auto;
+    padding: 2px 4px;
+    font-size: 11px;
+    white-space: nowrap;
+    cursor: pointer;
+    min-width: fit-content;
+}
+
+.changelist-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    background-color: var(--vscode-panel-background);
+    border-bottom: 1px solid var(--vscode-panel-border);
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--vscode-foreground);
+    position: sticky;
+    top: 37px;
+    z-index: 1;
+}
+
+.changelist-icon {
+    font-size: 14px;
+}
+
+.changelist-name {
+    color: var(--vscode-symbolIcon-folderForeground, #dcb28a);
+}
+
+.changelist-count {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    font-weight: normal;
+}
+
+.changelist-toggle {
+    cursor: pointer;
+    font-size: 12px;
+    min-width: 12px;
+    text-align: center;
+    padding: 2px 0;
+    border-radius: 3px;
+    transition: transform 0.2s ease;
+    user-select: none;
+}
+
+.changelist-toggle:hover {
+    background-color: var(--vscode-toolbar-hoverBackground);
+}
+
+.changelist-group.collapsed .changelist-toggle {
+    transform: rotate(-90deg);
+}
+
+.changelist-group.collapsed .changelist-files {
+    display: none;
+}
+
+.group-select-all {
+    cursor: pointer;
+    margin-right: 4px;
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+/* Changes 分组样式 */
+.group-changes .changelist-header {
+    background-color: var(--vscode-badge-background, #2c5e2e);
+}
+
+.group-changes .changelist-name {
+    color: var(--vscode-badge-foreground, #ffffff);
+}
+
+/* Unversioned Files 分组样式 */
+.group-unversioned .changelist-header {
+    background-color: var(--vscode-inputValidation-infoBackground, #1a3a5c);
+}
+
+.group-unversioned .changelist-name {
+    color: var(--vscode-inputValidation-infoForeground, #ffffff);
+}
+
 #extensionFilter {
     display: none;
 } 

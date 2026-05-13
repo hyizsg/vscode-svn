@@ -1,0 +1,388 @@
+/* SVN Merge Panel Styles */
+body {
+    padding: 0;
+    margin: 0;
+    font-family: var(--vscode-font-family);
+    font-size: var(--vscode-font-size);
+    color: var(--vscode-foreground);
+    background-color: var(--vscode-editor-background);
+}
+
+.merge-container {
+    padding: 16px;
+    max-width: 1100px;
+    margin: 0 auto;
+}
+
+.merge-header h2 {
+    margin: 0 0 12px 0;
+    font-size: 18px;
+    color: var(--vscode-foreground);
+}
+
+.repo-info {
+    background-color: var(--vscode-editor-inactiveSelectionBackground, rgba(255,255,255,0.04));
+    border: 1px solid var(--vscode-panel-border, #333);
+    border-radius: 4px;
+    padding: 10px 14px;
+    margin-bottom: 16px;
+}
+
+.info-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 0;
+    font-size: 12px;
+}
+
+.info-label {
+    color: var(--vscode-descriptionForeground, #888);
+    min-width: 70px;
+    flex-shrink: 0;
+}
+
+.info-value {
+    color: var(--vscode-foreground);
+    word-break: break-all;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+}
+
+/* Section */
+.merge-section {
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    background-color: var(--vscode-editor-inactiveSelectionBackground, rgba(255,255,255,0.02));
+    border: 1px solid var(--vscode-panel-border, #333);
+    border-radius: 4px;
+}
+
+.merge-section h3 {
+    margin: 0 0 10px 0;
+    font-size: 14px;
+    color: var(--vscode-foreground);
+}
+
+/* Source mode toggle */
+.source-mode-toggle,
+.revision-mode-toggle {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 12px;
+}
+
+.radio-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+/* Branch select */
+.branch-select-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.branch-select {
+    flex: 1;
+    padding: 6px 10px;
+    font-size: 13px;
+    background-color: var(--vscode-input-background, #3c3c3c);
+    color: var(--vscode-input-foreground, #ccc);
+    border: 1px solid var(--vscode-input-border, #555);
+    border-radius: 3px;
+    outline: none;
+}
+
+.branch-select:focus {
+    border-color: var(--vscode-focusBorder, #007acc);
+}
+
+/* Text input */
+.text-input {
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 13px;
+    background-color: var(--vscode-input-background, #3c3c3c);
+    color: var(--vscode-input-foreground, #ccc);
+    border: 1px solid var(--vscode-input-border, #555);
+    border-radius: 3px;
+    outline: none;
+    box-sizing: border-box;
+}
+
+.text-input:focus {
+    border-color: var(--vscode-focusBorder, #007acc);
+}
+
+/* ============ Revision Picker ============ */
+.revision-filter-bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 8px;
+}
+
+.filter-input {
+    flex: 1;
+}
+
+.hide-merged-label {
+    white-space: nowrap;
+    font-size: 12px;
+}
+
+/* Revision list */
+.revision-list-container {
+    border: 1px solid var(--vscode-panel-border, #333);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.revision-list-header {
+    display: grid;
+    grid-template-columns: 30px 70px 100px 140px 1fr;
+    gap: 4px;
+    padding: 6px 8px;
+    background-color: var(--vscode-editor-lineHighlightBackground, rgba(255,255,255,0.04));
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground, #888);
+    border-bottom: 1px solid var(--vscode-panel-border, #333);
+    user-select: none;
+}
+
+.revision-list-body {
+    max-height: 350px;
+    overflow-y: auto;
+}
+
+.revision-row {
+    display: grid;
+    grid-template-columns: 30px 70px 100px 140px 1fr;
+    gap: 4px;
+    padding: 5px 8px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--vscode-panel-border, rgba(255,255,255,0.05));
+    cursor: pointer;
+    transition: background-color 0.1s;
+}
+
+.revision-row:hover {
+    background-color: var(--vscode-list-hoverBackground, rgba(255,255,255,0.06));
+}
+
+.revision-row.selected {
+    background-color: var(--vscode-list-activeSelectionBackground, rgba(0,122,204,0.2));
+}
+
+.revision-row.merged {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.revision-row.merged .rev-col-num::after {
+    content: ' ✓';
+    color: var(--vscode-charts-green, #89d185);
+    font-size: 10px;
+}
+
+.revision-row .rev-col-check input {
+    cursor: pointer;
+}
+
+.revision-row.merged .rev-col-check input {
+    cursor: not-allowed;
+}
+
+.rev-col-check {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.rev-col-num {
+    font-family: var(--vscode-editor-font-family, monospace);
+    color: var(--vscode-textLink-foreground, #3794ff);
+}
+
+.rev-col-author {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rev-col-date {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground, #888);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.rev-col-msg {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.revision-empty {
+    padding: 20px;
+    text-align: center;
+    color: var(--vscode-descriptionForeground, #888);
+    font-size: 13px;
+}
+
+.revision-summary {
+    padding: 6px 8px;
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground, #888);
+}
+
+/* ============ Buttons ============ */
+.btn {
+    padding: 6px 14px;
+    font-size: 13px;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-primary {
+    background-color: var(--vscode-button-background, #0e639c);
+    color: var(--vscode-button-foreground, #fff);
+}
+
+.btn-primary:hover:not(:disabled) {
+    background-color: var(--vscode-button-hoverBackground, #1177bb);
+}
+
+.btn-secondary {
+    background-color: var(--vscode-button-secondaryBackground, #3a3d41);
+    color: var(--vscode-button-secondaryForeground, #ccc);
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background-color: var(--vscode-button-secondaryHoverBackground, #45494e);
+}
+
+/* Action section */
+.action-section {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.merge-status {
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+}
+
+.merge-status.loading {
+    color: var(--vscode-charts-yellow, #cca700);
+}
+
+.merge-status.success {
+    color: var(--vscode-charts-green, #89d185);
+}
+
+.merge-status.error {
+    color: var(--vscode-errorForeground, #f48771);
+}
+
+/* Result section */
+.merge-output {
+    background-color: var(--vscode-textCodeBlock-background, #1e1e1e);
+    border: 1px solid var(--vscode-panel-border, #333);
+    border-radius: 3px;
+    padding: 10px 12px;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    line-height: 1.5;
+    max-height: 300px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+}
+
+/* Conflict section */
+.conflict-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.conflict-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background-color: var(--vscode-editor-background);
+    border: 1px solid var(--vscode-panel-border, #333);
+    border-radius: 3px;
+    border-left: 3px solid var(--vscode-errorForeground, #f48771);
+}
+
+.conflict-icon {
+    color: var(--vscode-errorForeground, #f48771);
+    font-size: 14px;
+}
+
+.conflict-path {
+    flex: 1;
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.conflict-type {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    padding: 1px 6px;
+    border-radius: 3px;
+    background-color: var(--vscode-badge-background, #4d4d4d);
+}
+
+.conflict-resolve-btns {
+    display: flex;
+    gap: 4px;
+}
+
+.conflict-resolve-btns .btn {
+    padding: 2px 8px;
+    font-size: 11px;
+}
+
+.conflict-actions {
+    margin-top: 12px;
+}
+
+.conflict-item.resolved {
+    opacity: 0.5;
+    border-left-color: var(--vscode-charts-green, #89d185);
+}
+
+.conflict-item.resolved .conflict-icon {
+    color: var(--vscode-charts-green, #89d185);
+}

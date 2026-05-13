@@ -28,15 +28,19 @@
                 <input type="checkbox" id="missing-checkbox" checked>
                 丢失
             </label>
+            <label style="margin-left:12px;border-left:1px solid var(--vscode-panel-border,#444);padding-left:12px;">
+                <input type="checkbox" id="lockedOnly-checkbox">
+                仅锁定
+            </label>
         </div>
-        <div class="extension-filter">
-            <label class="extension-filter-label">文件后缀筛选：</label>
-            <div class="extension-tags-container" id="extensionTagsContainer">
-                <!-- 动态生成的后缀标签将在这里显示 -->
+        <div class="group-filter">
+            <label class="group-filter-label">分组筛选：</label>
+            <div class="group-tags-container" id="groupTagsContainer">
+                {{GROUP_FILTER_TAGS}}
             </div>
-            <div class="extension-actions">
-                <button class="extension-action-btn" id="selectAllExtensions" title="选择全部后缀">全选</button>
-                <button class="extension-action-btn" id="clearAllExtensions" title="清除全部选择">清空</button>
+            <div class="group-actions">
+                <button class="group-action-btn" id="selectAllGroups">全选</button>
+                <button class="group-action-btn" id="clearAllGroups">清空</button>
             </div>
         </div>
         {{FILTER_INFO}}
@@ -60,19 +64,14 @@
     </div>
 
     <div class="commit-section">
-        <div class="prefix-section">
-            <div class="prefix-container">
-                <select id="prefixSelect">
-                    {{PREFIX_OPTIONS}}
-                </select>
-                <input type="text" id="prefixInput" class="prefix-input" placeholder="日志前缀" value="{{LATEST_PREFIX}}">
-                <button id="applyPrefixButton">应用前缀</button>
-            </div>
-        </div>
-        <textarea id="commitMessage" placeholder="请输入提交信息">{{LATEST_PREFIX}}</textarea>
+        <textarea id="commitMessage" placeholder="请输入提交信息">{{LAST_COMMIT_MESSAGE}}</textarea>
         <div class="button-container">
-            <button id="submitButton">提交</button>
+            <select id="historySelect" class="history-select">
+                <option value="">历史提交记录</option>
+                {{PREFIX_OPTIONS}}
+            </select>
             <button id="generateAIButton">使用AI生成提交日志</button>
+            <button id="submitButton">提交</button>
         </div>
     </div>
 

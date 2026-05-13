@@ -67,7 +67,7 @@ export class SvnCommitPanel {
       // 如果是同一个文件，只需要刷新面板
       if (SvnCommitPanel.currentPanel.filePath === filePath) {
         SvnCommitPanel.currentPanel.refreshPanel();
-        SvnCommitPanel.currentPanel.panel.reveal(column);
+        SvnCommitPanel.currentPanel.panel.reveal(undefined, true);
         return;
       } else {
         // 如果是不同的文件，关闭当前面板，创建新的
@@ -86,6 +86,11 @@ export class SvnCommitPanel {
         retainContextWhenHidden: true
       }
     );
+
+    // 将 webview 面板移到独立的悬浮窗口
+    setTimeout(() => {
+      vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow').then(undefined, () => { /* 老版本不支持，静默忽略 */ });
+    }, 100);
 
     SvnCommitPanel.currentPanel = new SvnCommitPanel(
       panel,

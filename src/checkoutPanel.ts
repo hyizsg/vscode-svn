@@ -48,7 +48,7 @@ export class SvnCheckoutPanel {
 
     // 如果已有面板存在，则显示它
     if (SvnCheckoutPanel.currentPanel) {
-      SvnCheckoutPanel.currentPanel._panel.reveal(column);
+      SvnCheckoutPanel.currentPanel._panel.reveal(undefined, true);
       return;
     }
 
@@ -65,6 +65,11 @@ export class SvnCheckoutPanel {
         ]
       }
     );
+
+    // 将 webview 面板移到独立的悬浮窗口
+    setTimeout(() => {
+      vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow').then(undefined, () => { /* 老版本不支持，静默忽略 */ });
+    }, 100);
 
     SvnCheckoutPanel.currentPanel = new SvnCheckoutPanel(
       panel, 

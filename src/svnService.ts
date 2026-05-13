@@ -1009,21 +1009,198 @@ export class SvnService {
       this.outputChannel.appendLine('正在恢复文件到版本库状态...');
       
       // 特殊处理：如果文件名包含@符号，需要在文件名后添加额外的@来转义
-      let fileName = path.basename(filePath);
-      const needsEscaping = fileName.includes('@');
-      if (needsEscaping) {
-        // 对于revert，我们需要处理完整路径
-        filePath = `${filePath}@`;
+      let targetPath = filePath;
+      const fileName = path.basename(filePath);
+      if (fileName.includes('@')) {
+        targetPath = `${filePath}@`;
       }
       
-      const result = await this.executeSvnCommand(`revert "${filePath}"`, path.dirname(filePath));
-      this.outputChannel.appendLine(result);
+      // 确定工作目录：向上遍历找到存在的父目录（避免 cwd 不存在导致 ENOENT）
+      let cwd = path.dirname(filePath);
+      while (cwd && cwd !== path.dirname(cwd)) {
+        if (fs.existsSync(cwd)) break;
+        cwd = path.dirname(cwd);
+      }
+      
+      try {
+        const result = await this.executeSvnCommand(`revert "${targetPath}"`, cwd);
+        this.outputChannel.appendLine(result);
+      } catch (firstErr: any) {
+        // E155038: 目录包含子文件，需要 --depth infinity
+        if (firstErr.message && firstErr.message.includes('E155038')) {
+          this.outputChannel.appendLine('[revertFile] 目标是目录，使用 --depth infinity 递归恢复...');
+          const result = await this.executeSvnCommand(`revert --depth infinity "${targetPath}"`, cwd);
+          this.outputChannel.appendLine(result);
+        // E155010: 节点未找到，尝试相对路径
+        } else if (firstErr.message && firstErr.message.includes('E155010')) {
+          this.outputChannel.appendLine('[revertFile] 绝对路径失败，尝试使用相对路径...');
+          const wcRoot = this._findWorkingCopyRoot(cwd);
+          if (wcRoot) {
+            const relativePath = path.relative(wcRoot, targetPath);
+            this.outputChannel.appendLine(`[revertFile] 工作副本根: ${wcRoot}, 相对路径: ${relativePath}`);
+            const result = await this.executeSvnCommand(`revert "${relativePath}"`, wcRoot);
+            this.outputChannel.appendLine(result);
+          } else {
+            throw firstErr;
+          }
+        } else {
+          throw firstErr;
+        }
+      }
       this.outputChannel.appendLine('========== SVN恢复操作完成 ==========');
     } catch (error: any) {
       this.outputChannel.appendLine(`错误: ${error.message}`);
       this.outputChannel.appendLine('========== SVN恢复操作失败 ==========');
       throw new Error(`恢复文件失败: ${error.message}`);
     }
+  }
+
+  /**
+   * 批量恢复文件到版本库状态（仿 TortoiseSVN：--targets 文件 + 路径去重）
+   * - 按深度升序排序后剔除被祖先目录覆盖的子路径（否则父 revert 后子路径会报 E155010）
+   * - 用临时 --targets 文件传入，避免命令行长度限制
+   * - --depth infinity 让目录级 revert 递归生效
+   * @param filePaths 文件路径数组
+   */
+  public async revertFiles(filePaths: string[]): Promise<void> {
+    if (!filePaths || filePaths.length === 0) return;
+    this.showOutputChannel('SVN批量恢复操作');
+    this.outputChannel.appendLine(`批量恢复 ${filePaths.length} 个文件`);
+
+    let tmpFile: string | null = null;
+    try {
+      // 1. 路径规范化 + 去重
+      const normalized = Array.from(new Set(
+        filePaths.map(fp => path.normalize(fp))
+      ));
+
+      // 2. 按路径长度升序排序 → 祖先在前
+      normalized.sort((a, b) => a.length - b.length);
+
+      // 3. 剔除被已存在祖先覆盖的子路径（关键：避免父 revert 后子路径 E155010）
+      const roots: string[] = [];
+      for (const p of normalized) {
+        const covered = roots.some(root => {
+          const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+          return p === root || p.startsWith(rootWithSep);
+        });
+        if (!covered) {
+          roots.push(p);
+        }
+      }
+      this.outputChannel.appendLine(`[revertFiles] 原 ${filePaths.length} 个路径去重/剔除子路径后剩 ${roots.length} 个顶级节点`);
+
+      // 4. 处理文件名包含 @ 的特殊转义
+      const targets = roots.map(fp => {
+        const fileName = path.basename(fp);
+        return fileName.includes('@') ? `${fp}@` : fp;
+      });
+
+      // 5. 确定工作目录：向上遍历找到存在的父目录
+      let cwd = path.dirname(roots[0]);
+      while (cwd && cwd !== path.dirname(cwd)) {
+        if (fs.existsSync(cwd)) break;
+        cwd = path.dirname(cwd);
+      }
+
+      // 6. 写 --targets 临时文件（每行一个路径，避免命令行长度限制）
+      tmpFile = path.join(os.tmpdir(), `svn-revert-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+      fs.writeFileSync(tmpFile, targets.join('\n'), 'utf8');
+
+      try {
+        const result = await this.executeSvnCommand(`revert --depth infinity --targets "${tmpFile}"`, cwd);
+        this.outputChannel.appendLine(result);
+      } catch (firstErr: any) {
+        // E155010: 节点未找到，尝试从工作副本根使用相对路径再 targets 一次
+        if (firstErr.message && firstErr.message.includes('E155010')) {
+          this.outputChannel.appendLine('[revertFiles] 绝对路径失败，尝试使用相对路径...');
+          const wcRoot = this._findWorkingCopyRoot(cwd);
+          if (wcRoot) {
+            const relTargets = targets.map(t => path.relative(wcRoot, t));
+            fs.writeFileSync(tmpFile, relTargets.join('\n'), 'utf8');
+            this.outputChannel.appendLine(`[revertFiles] 工作副本根: ${wcRoot}`);
+            const result = await this.executeSvnCommand(`revert --depth infinity --targets "${tmpFile}"`, wcRoot);
+            this.outputChannel.appendLine(result);
+          } else {
+            throw firstErr;
+          }
+        } else {
+          throw firstErr;
+        }
+      }
+      this.outputChannel.appendLine('========== SVN批量恢复操作完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      this.outputChannel.appendLine('========== SVN批量恢复操作失败 ==========');
+      throw new Error(`批量恢复失败: ${error.message}`);
+    } finally {
+      if (tmpFile) {
+        try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  /**
+   * 批量将多个文件从 changelist 中移除（一次 SVN 进程）
+   * 仿 TortoiseSVN 使用 --targets 文件：安全处理长参数与特殊字符
+   */
+  public async removeFromChangelistBatch(filePaths: string[]): Promise<void> {
+    if (!filePaths || filePaths.length === 0) return;
+    this.showOutputChannel('SVN Changelist 批量移除');
+    this.outputChannel.appendLine(`批量将 ${filePaths.length} 个文件从 changelist 移除`);
+
+    let tmpFile: string | null = null;
+    try {
+      // 处理 @ 转义
+      const targets = filePaths.map(fp => {
+        const fileName = path.basename(fp);
+        return fileName.includes('@') ? `${fp}@` : fp;
+      });
+
+      // 确定工作目录：以第一个文件的父目录为基向上寻存在路径
+      let cwd = path.dirname(filePaths[0]);
+      while (cwd && cwd !== path.dirname(cwd)) {
+        if (fs.existsSync(cwd)) break;
+        cwd = path.dirname(cwd);
+      }
+
+      // 使用 --targets 文件避免命令行长度限制
+      tmpFile = path.join(os.tmpdir(), `svn-cl-remove-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+      fs.writeFileSync(tmpFile, targets.join('\n'), 'utf8');
+
+      try {
+        const result = await this.executeSvnCommand(`changelist --remove --targets "${tmpFile}"`, cwd);
+        this.outputChannel.appendLine(result);
+      } catch (clErr: any) {
+        // 部分文件已不在 changelist 中时 svn 会非 0 退出，但已处理的文件仍然生效，在批量场景下容忍
+        this.outputChannel.appendLine(`[changelist --remove] 部分文件可能已不在 changelist 中，忽略：${clErr.message || clErr}`);
+      }
+      this.outputChannel.appendLine('========== SVN Changelist 批量移除完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      this.outputChannel.appendLine('========== SVN Changelist 批量移除失败 ==========');
+      // 不抑制抛出，但考虑 revert 后 changelist 清理是副作用，不应让整体操作失败
+      throw new Error(`批量移出 changelist 失败: ${error.message}`);
+    } finally {
+      if (tmpFile) {
+        try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  /**
+   * 向上查找 SVN 工作副本根目录（包含 .svn 的最顶层目录）
+   */
+  private _findWorkingCopyRoot(startDir: string): string | null {
+    let dir = startDir;
+    let lastSvnDir: string | null = null;
+    while (dir && dir !== path.dirname(dir)) {
+      if (fs.existsSync(path.join(dir, '.svn'))) {
+        lastSvnDir = dir;
+      }
+      dir = path.dirname(dir);
+    }
+    return lastSvnDir;
   }
 
   /**
@@ -1814,8 +1991,8 @@ export class SvnService {
         if (line.length === 0) continue;
         
         const status = line[0];
-        const match = line.match(/^.\s+(.+)$/);
-        const filePath = match ? match[1].trim() : line.substring(1).trim();
+        const match = line.match(/^.[ A-Z+*!~]* {2,}(.+)$/);
+        const filePath = match ? match[1] : line.replace(/^.\s+/, '').trim();
         
         if (status === 'C') {
           // 找到冲突文件
@@ -2192,6 +2369,171 @@ export class SvnService {
     }
   }
 
+  // ===================== Changelist 功能 =====================
+
+  /**
+   * 获取所有 changelist 列表
+   * @param basePath 工作副本路径
+   * @returns changelist 名称数组
+   */
+  public async getChangelists(basePath: string): Promise<string[]> {
+    try {
+      const result = await this.executeSvnCommand('status', basePath);
+      const changelists = new Set<string>();
+      const lines = result.split('\n');
+      for (const line of lines) {
+        const match = line.match(/^--- Changelist '(.+)'/);
+        if (match) {
+          changelists.add(match[1]);
+        }
+      }
+      return Array.from(changelists);
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getChangelists] 获取 changelist 失败: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * 获取指定 changelist 中的文件列表
+   * @param basePath 工作副本路径
+   * @param changelistName changelist 名称
+   * @returns 文件路径数组（相对路径）
+   */
+  public async getChangelistFiles(basePath: string, changelistName: string): Promise<string[]> {
+    try {
+      const result = await this.executeSvnCommand(`status --changelist "${changelistName}"`, basePath);
+      const files: string[] = [];
+      const lines = result.split('\n');
+      for (const line of lines) {
+        if (line.length > 7 && !line.startsWith('---')) {
+          const filePath = line.substring(7).trim();
+          if (filePath) {
+            files.push(filePath);
+          }
+        }
+      }
+      return files;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getChangelistFiles] 获取 changelist 文件失败: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * 将文件添加到 changelist
+   * @param filePath 文件路径
+   * @param changelistName changelist 名称
+   */
+  public async addToChangelist(filePath: string, changelistName: string): Promise<void> {
+    this.showOutputChannel('SVN Changelist 操作');
+    this.outputChannel.appendLine(`将文件添加到 changelist: ${changelistName}`);
+    this.outputChannel.appendLine(`文件: ${filePath}`);
+
+    try {
+      let fileName = path.basename(filePath);
+      const needsEscaping = fileName.includes('@');
+      if (needsEscaping) {
+        fileName = `${fileName}@`;
+      }
+
+      const command = `changelist "${changelistName.replace(/"/g, '\\"')}" "${fileName}"`;
+      const result = await this.executeSvnCommand(command, path.dirname(filePath));
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== SVN Changelist 操作完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      this.outputChannel.appendLine('========== SVN Changelist 操作失败 ==========');
+      throw new Error(`添加到 changelist 失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 将文件从 changelist 中移除
+   * @param filePath 文件路径
+   */
+  public async removeFromChangelist(filePath: string): Promise<void> {
+    this.showOutputChannel('SVN Changelist 操作');
+    this.outputChannel.appendLine(`将文件从 changelist 移除`);
+    this.outputChannel.appendLine(`文件: ${filePath}`);
+
+    try {
+      let fileName = path.basename(filePath);
+      const needsEscaping = fileName.includes('@');
+      if (needsEscaping) {
+        fileName = `${fileName}@`;
+      }
+
+      const command = `changelist --remove "${fileName}"`;
+      const result = await this.executeSvnCommand(command, path.dirname(filePath));
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== SVN Changelist 操作完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      this.outputChannel.appendLine('========== SVN Changelist 操作失败 ==========');
+      throw new Error(`从 changelist 移除失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 提交指定 changelist
+   * @param basePath 工作副本路径
+   * @param changelistName changelist 名称
+   * @param message 提交信息
+   */
+  public async commitChangelist(basePath: string, changelistName: string, message: string): Promise<void> {
+    this.showOutputChannel('SVN Changelist 提交');
+    this.outputChannel.appendLine(`提交 changelist: ${changelistName}`);
+    this.outputChannel.appendLine(`工作目录: ${basePath}`);
+    this.outputChannel.appendLine(`提交信息: ${message}`);
+
+    try {
+      const command = `commit --changelist "${changelistName.replace(/"/g, '\\"')}" -m "${message.replace(/"/g, '\\"')}"`;
+      const result = await this.executeSvnCommand(command, basePath);
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== SVN Changelist 提交完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      this.outputChannel.appendLine('========== SVN Changelist 提交失败 ==========');
+
+      if (this.isOutOfDateError(error.message)) {
+        await this.handleOutOfDateError(basePath, message);
+        return;
+      }
+
+      throw new Error(`提交 changelist 失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 获取文件的 changelist 信息
+   * @param filePath 文件路径
+   * @returns changelist 名称，如果没有则返回 undefined
+   */
+  public async getFileChangelist(filePath: string): Promise<string | undefined> {
+    try {
+      const cwd = path.dirname(filePath);
+      let fileName = path.basename(filePath);
+      const needsEscaping = fileName.includes('@');
+      if (needsEscaping) {
+        fileName = `${fileName}@`;
+      }
+
+      const result = await this.executeSvnCommand(`status "${fileName}"`, cwd);
+      const lines = result.split('\n');
+      for (const line of lines) {
+        const match = line.match(/^--- Changelist '(.+)'/);
+        if (match) {
+          return match[1];
+        }
+      }
+      return undefined;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getFileChangelist] 获取文件 changelist 失败: ${error.message}`);
+      return undefined;
+    }
+  }
+
   /**
    * 获取文件锁定信息
    * 通过 svn info --xml 解析远程仓库中的锁信息
@@ -2266,6 +2608,275 @@ export class SvnService {
     } catch (error: any) {
       this.outputChannel.appendLine(`[getLockInfo] 获取锁定信息失败: ${error.message}`);
       throw new Error(`获取锁定信息失败: ${error.message}`);
+    }
+  }
+
+  // ===================== Merge 相关方法 =====================
+
+  /**
+   * 获取仓库根 URL
+   */
+  public async getRepositoryRootUrlFromInfo(workingDir: string): Promise<string> {
+    try {
+      const result = await this.executeSvnCommand('info --xml', workingDir);
+      const rootMatch = result.match(/<root>([^<]+)<\/root>/);
+      if (!rootMatch) throw new Error('无法从 svn info 中解析 repository root');
+      return rootMatch[1].trim();
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getRepositoryRootUrlFromInfo] 失败: ${error.message}`);
+      throw new Error(`获取仓库根URL失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 获取当前工作副本的 URL（当前分支）
+   */
+  public async getWorkingCopyUrl(workingDir: string): Promise<string> {
+    try {
+      const result = await this.executeSvnCommand('info --xml', workingDir);
+      const urlMatch = result.match(/<url>([^<]+)<\/url>/);
+      if (!urlMatch) throw new Error('无法从 svn info 中解析工作副本 URL');
+      return urlMatch[1].trim();
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getWorkingCopyUrl] 失败: ${error.message}`);
+      throw new Error(`获取工作副本URL失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 列出远程 SVN 目录
+   */
+  public async listRemoteDir(svnUrl: string, workingDir: string): Promise<string[]> {
+    try {
+      const result = await this.executeSvnCommand(`ls "${svnUrl}"`, workingDir);
+      return result.split('\n')
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .map(line => line.replace(/\/$/, '')); // 去掉尾部 /
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[listRemoteDir] 列出 ${svnUrl} 失败: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * 执行 SVN 合并
+   */
+  public async merge(workingDir: string, sourceUrl: string, options?: {
+    revisionRange?: string;
+    dryRun?: boolean;
+    onProgress?: (line: string) => void;
+  }): Promise<string> {
+    let cmd = `merge "${sourceUrl}"`;
+    if (options?.revisionRange) {
+      // -c r1,r2,r3 格式（cherry-pick 多个版本）
+      cmd += ` -c ${options.revisionRange}`;
+    }
+    if (options?.dryRun) {
+      cmd += ' --dry-run';
+    }
+    try {
+      this.outputChannel.appendLine(`[merge] 执行: svn ${cmd}`);
+      this.outputChannel.appendLine(`[merge] 工作目录: ${workingDir}`);
+      
+      if (options?.onProgress) {
+        // 流式执行，实时回调输出
+        const result = await this._executeCommandWithProgress(cmd, workingDir, options.onProgress);
+        this.outputChannel.appendLine(`[merge] 输出:\n${result}`);
+        return result;
+      } else {
+        const result = await this.executeSvnCommand(cmd, workingDir);
+        this.outputChannel.appendLine(`[merge] 输出:\n${result}`);
+        return result;
+      }
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[merge] 失败: ${error.message}`);
+      throw new Error(`合并失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 执行 SVN 命令并实时回调输出
+   */
+  private _executeCommandWithProgress(
+    command: string,
+    cwd: string,
+    onProgress: (line: string) => void
+  ): Promise<string> {
+    const env = this.getEnhancedEnvironment();
+    const finalCommand = `svn ${command}`.trim();
+
+    return new Promise<string>((resolve, reject) => {
+      let stdout = '';
+      let stderr = '';
+      const svnProcess = cp.exec(
+        finalCommand,
+        { cwd, env, maxBuffer: 50 * 1024 * 1024, encoding: 'utf8' as BufferEncoding },
+        (error) => {
+          if (error) {
+            const errMsg = stderr || error.message;
+            reject(new Error(`SVN错误: ${errMsg}`));
+          } else {
+            resolve(stdout);
+          }
+        }
+      );
+
+      if (svnProcess.stdout) {
+        let buffer = '';
+        svnProcess.stdout.on('data', (data: string) => {
+          stdout += data;
+          buffer += data;
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (line.trim()) {
+              onProgress(line);
+            }
+          }
+        });
+        svnProcess.stdout.on('end', () => {
+          if (buffer.trim()) {
+            onProgress(buffer);
+          }
+        });
+      }
+
+      if (svnProcess.stderr) {
+        svnProcess.stderr.on('data', (data: string) => {
+          stderr += data;
+          const lines = data.split('\n');
+          for (const line of lines) {
+            if (line.trim()) {
+              onProgress(`⚠️ ${line}`);
+            }
+          }
+        });
+      }
+    });
+  }
+
+  /**
+   * 获取工作副本中的冲突文件列表
+   */
+  public async getMergeConflicts(workingDir: string): Promise<ConflictFile[]> {
+    try {
+      const result = await this.executeSvnCommand('status', workingDir);
+      const conflicts: ConflictFile[] = [];
+      const lines = result.split('\n');
+      for (const line of lines) {
+        if (line.length < 8) continue;
+        const textStatus = line.charAt(0);
+        const propStatus = line.charAt(1);
+        const treeStatus = line.charAt(6);
+        if (textStatus === 'C' || propStatus === 'C' || treeStatus === 'C') {
+          const filePath = line.substring(8).trim();
+          if (!filePath) continue;
+          let conflictType: 'text' | 'tree' | 'property' = 'text';
+          if (treeStatus === 'C') conflictType = 'tree';
+          else if (propStatus === 'C') conflictType = 'property';
+          conflicts.push({
+            path: path.resolve(workingDir, filePath),
+            displayName: filePath,
+            conflictType,
+            status: 'C'
+          });
+        }
+      }
+      return conflicts;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getMergeConflicts] 失败: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * 标记合并冲突为已解决（与已有 resolveConflict 区分，支持更多 resolution 类型）
+   */
+  public async resolveMergeConflict(filePath: string, resolution: 'working' | 'theirs-full' | 'mine-full' = 'working'): Promise<void> {
+    const dir = path.dirname(filePath);
+    const fileName = path.basename(filePath);
+    try {
+      await this.executeSvnCommand(`resolve --accept=${resolution} "${fileName}"`, dir);
+      this.outputChannel.appendLine(`[resolveConflict] 已解决: ${filePath} (${resolution})`);
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[resolveConflict] 失败: ${error.message}`);
+      throw new Error(`解决冲突失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 获取 SVN 日志（解析 XML 格式，用于合并面板版本选择器）
+   */
+  public async getLogEntries(svnUrl: string, workingDir: string, limit: number = 500): Promise<Array<{
+    revision: number;
+    author: string;
+    date: string;
+    message: string;
+  }>> {
+    try {
+      const result = await this.executeSvnCommand(`log --xml -l ${limit} "${svnUrl}"`, workingDir);
+      const entries: Array<{ revision: number; author: string; date: string; message: string }> = [];
+      // 解析 <logentry revision="xxx"> ... </logentry>
+      const entryRegex = /<logentry[^>]*revision="(\d+)"[^>]*>([\s\S]*?)<\/logentry>/g;
+      let match;
+      while ((match = entryRegex.exec(result)) !== null) {
+        const rev = parseInt(match[1], 10);
+        const body = match[2];
+        const authorMatch = body.match(/<author>([^<]*)<\/author>/);
+        const dateMatch = body.match(/<date>([^<]*)<\/date>/);
+        const msgMatch = body.match(/<msg>([\s\S]*?)<\/msg>/);
+        entries.push({
+          revision: rev,
+          author: authorMatch ? authorMatch[1] : '',
+          date: dateMatch ? dateMatch[1] : '',
+          message: msgMatch ? msgMatch[1].trim() : ''
+        });
+      }
+      return entries;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getLog] 失败: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * 获取已合并的版本号列表
+   */
+  public async getMergedRevisions(workingDir: string, sourceUrl: string): Promise<Set<number>> {
+    try {
+      const result = await this.executeSvnCommand(
+        `mergeinfo --show-revs merged "${sourceUrl}"`, workingDir
+      );
+      const revs = new Set<number>();
+      result.split('\n').forEach(line => {
+        const m = line.trim().match(/^r?(\d+)$/);
+        if (m) revs.add(parseInt(m[1], 10));
+      });
+      return revs;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getMergedRevisions] 失败: ${error.message}`);
+      return new Set();
+    }
+  }
+
+  /**
+   * 获取可合并的版本号列表
+   */
+  public async getEligibleRevisions(workingDir: string, sourceUrl: string): Promise<Set<number>> {
+    try {
+      const result = await this.executeSvnCommand(
+        `mergeinfo --show-revs eligible "${sourceUrl}"`, workingDir
+      );
+      const revs = new Set<number>();
+      result.split('\n').forEach(line => {
+        const m = line.trim().match(/^r?(\d+)$/);
+        if (m) revs.add(parseInt(m[1], 10));
+      });
+      return revs;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getEligibleRevisions] 失败: ${error.message}`);
+      return new Set();
     }
   }
 }

@@ -5,6 +5,7 @@ import { CommitLogStorage } from './commitLogStorage';
 import { SvnFilterService } from './filterService';
 import { TemplateManager } from './templateManager';
 import * as path from 'path';
+import * as fs from 'fs';
 import { AiService } from './aiService';
 
 interface FileStatus {
@@ -12,6 +13,8 @@ interface FileStatus {
     status: string;
     type: 'modified' | 'added' | 'deleted' | 'unversioned' | 'conflict' | 'missing';
     displayName: string;
+    changelist?: string;
+    locked?: boolean;
 }
 
 export class SvnFolderCommitPanel {
@@ -19,6 +22,8 @@ export class SvnFolderCommitPanel {
     private readonly _panel: vscode.WebviewPanel;
     private _disposables: vscode.Disposable[] = [];
     private _fileStatuses: FileStatus[] = [];
+    // 维护已知的 changelist 名称集（含空 changelist），以便无文件时也显示
+    private _knownChangelists: Set<string> = new Set();
     private readonly aiService: AiService;
     private outputChannel: vscode.OutputChannel;
     private readonly filterService: SvnFilterService;
@@ -64,8 +69,8 @@ export class SvnFolderCommitPanel {
                 SvnFolderCommitPanel.currentPanel.dispose();
                 // 注意：dispose() 方法会将 currentPanel 设置为 undefined
             } else {
-                // 相同路径，直接显示现有面板
-                SvnFolderCommitPanel.currentPanel._panel.reveal(column);
+                // 相同路径，直接显示现有面板（不指定 column，避免拉回主窗口）
+                SvnFolderCommitPanel.currentPanel._panel.reveal(undefined, true);
                 return;
             }
         }
@@ -76,9 +81,15 @@ export class SvnFolderCommitPanel {
             column || vscode.ViewColumn.One,
             {
                 enableScripts: true,
+                retainContextWhenHidden: true,
                 localResourceRoots: [extensionUri]
             }
         );
+
+        // 将 webview 面板移到独立的悬浮窗口
+        setTimeout(() => {
+            vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow').then(undefined, () => { /* 老版本不支持，静默忽略 */ });
+        }, 100);
 
         SvnFolderCommitPanel.currentPanel = new SvnFolderCommitPanel(
             panel,
@@ -119,6 +130,7 @@ export class SvnFolderCommitPanel {
             this.outputChannel.appendLine(`[_updateFileStatuses] SVN status 原始输出:\n${statusResult}`);
 
             // 首先处理所有文件状态
+            let currentChangelist: string | undefined = undefined;
             const allFileStatuses = statusResult
                 .split('\n')
                 .map(line => line.trim())
@@ -127,25 +139,38 @@ export class SvnFolderCommitPanel {
                     // 过滤树冲突的详细信息行
                     if (line.startsWith('>')) return false;
                     // 过滤 svn:externals 提示行（issue #19）
-                    // SVN 在进入外部链接目录时会输出：Performing status on external item at '...'
                     if (line.startsWith('Performing status on external item')) return false;
                     // 过滤外部链接占位行（状态字符为 'X'）以及第7列为 'X' 的外部链接定义行
-                    // SVN status 第7列（索引6）若为 X 表示该项是外部链接定义
                     if (line[0] === 'X') return false;
                     if (line.length > 6 && line[6] === 'X') return false;
                     return true;
                 })
                 .map(line => {
+                    // 检测 changelist 分隔行: --- Changelist 'name':
+                    const changelistMatch = line.match(/^---\s+Changelist\s+'(.+)'/);
+                    if (changelistMatch) {
+                        currentChangelist = changelistMatch[1];
+                        this.outputChannel.appendLine(`[_updateFileStatuses] 发现 changelist: "${currentChangelist}"`);
+                        return null; // changelist 分隔行不生成文件记录
+                    }
+            
                     // SVN status 输出格式：
-                    // 第一列：文件状态 (M:修改, A:新增, D:删除, ?:未版本控制, C:冲突, !:丢失等)
-                    // 后面跟着空格，然后是文件路径
+                    // 第1列：文件状态 (M:修改, A:新增, D:删除, ?:未版本控制, C:冲突, !:丢失等)
+                    // 第2列：属性状态
+                    // 第3列：锁定状态
+                    // 第4列：历史标记（+表示有copy历史）
+                    // 第5列：切换标记
+                    // 第6列：锁定信息
+                    // 第7列：冲突标记
+                    // 第8列及之后：空格 + 文件路径
                     const status = line[0];
-                    // 找到第一个非空格字符后的文件路径
-                    const match = line.match(/^.\s+(.+)$/);
-                    const filePath = match ? match[1].trim() : line.substring(1).trim();
-                    console.log('Processing line:', { status, filePath });
-                    this.outputChannel.appendLine(`[_updateFileStatuses] 处理行: "${line}" -> 状态: "${status}", 文件路径: "${filePath}"`);
-
+                    // 跳过前面所有状态标志列和空格，提取真正的文件路径
+                    // 匹配模式：第1个字符(状态) + 任意数量的空格/标志字符(+、空格等) + 文件路径
+                    const match = line.match(/^.[ A-Z+*!~]* {2,}(.+)$/);
+                    const filePath = match ? match[1] : line.replace(/^.\s+/, '').trim();
+                    console.log('Processing line:', { status, filePath, changelist: currentChangelist });
+                    this.outputChannel.appendLine(`[_updateFileStatuses] 处理行: "${line}" -> 状态: "${status}", 文件路径: "${filePath}", changelist: "${currentChangelist || ''}"`);
+            
                     let type: 'modified' | 'added' | 'deleted' | 'unversioned' | 'conflict' | 'missing';
                     switch (status) {
                         case 'M':
@@ -167,17 +192,26 @@ export class SvnFolderCommitPanel {
                         default:
                             type = 'unversioned';
                     }
-
+            
+                    // 解析锁定列：第3列 'L'（工作副本锁定）或第6列 K/O/T/B（lock token）
+                    const wcLocked = line.length > 2 && line[2] === 'L';
+                    const lockTokenCh = line.length > 5 ? line[5] : ' ';
+                    const tokenLocked = lockTokenCh === 'K' || lockTokenCh === 'O' || lockTokenCh === 'T' || lockTokenCh === 'B';
+                    const locked = wcLocked || tokenLocked;
+            
                     // 使用 path.resolve 获取绝对路径
                     const absolutePath = path.resolve(this.folderPath, filePath);
-                    
+            
                     return {
                         path: absolutePath,
                         status: this._getStatusText(status),
                         type,
-                        displayName: filePath // 使用相对路径作为显示名称
+                        displayName: filePath, // 使用相对路径作为显示名称
+                        changelist: currentChangelist,
+                        locked
                     };
-                });
+                })
+                .filter(item => item !== null) as FileStatus[];
 
             // 应用过滤器排除不需要的文件
             this.outputChannel.appendLine(`[_updateFileStatuses] 开始应用过滤器，原始文件数量: ${allFileStatuses.length}`);
@@ -229,6 +263,8 @@ export class SvnFolderCommitPanel {
             }
 
             this._fileStatuses = filteredFileStatuses;
+            // 将当前文件中出现的 changelist 加入已知集合（新建/删除操作会单独更新）
+            this._fileStatuses.forEach(fs => { if (fs.changelist) this._knownChangelists.add(fs.changelist); });
             console.log('Processed and filtered file statuses:', this._fileStatuses);
             this.outputChannel.appendLine(`[_updateFileStatuses] 最终文件状态列表 (${this._fileStatuses.length} 个文件):`);
             this._fileStatuses.forEach((file, index) => {
@@ -258,16 +294,20 @@ export class SvnFolderCommitPanel {
     }
 
     private async _showFileDiff(filePath: string) {
-        // 创建新的webview面板显示文件差异
-        const diffPanel = vscode.window.createWebviewPanel(
-            'svnFileDiff',
-            `文件差异: ${path.basename(filePath)}`,
-            vscode.ViewColumn.Beside,
-            { enableScripts: true }
-        );
-
-        const diff = await this.diffProvider.getDiff(filePath);
-        diffPanel.webview.html = this._getHtmlForDiffView(filePath, diff);
+        // 查找文件状态
+        const fileStatus = this._fileStatuses.find(f => f.path === filePath);
+        if (fileStatus && fileStatus.type === 'modified') {
+            // 修改状态：使用 VS Code 原生差异对比视图
+            await this.diffProvider.showDiff(filePath);
+        } else {
+            // 其他状态（新增/删除/未版本控制）：直接打开文件
+            const uri = vscode.Uri.file(filePath);
+            try {
+                await vscode.commands.executeCommand('vscode.open', uri);
+            } catch (error: any) {
+                this.outputChannel.appendLine(`[_showFileDiff] 打开文件失败: ${error.message}`);
+            }
+        }
     }
 
     private async _commitFiles(files: string[], message: string) {
@@ -361,39 +401,63 @@ export class SvnFolderCommitPanel {
             this.outputChannel.appendLine(`  - 文件: ${onlyFiles.length} 个`);
             this.outputChannel.appendLine(`  - 目录: ${directories.length} 个`);
             
+            // 检测是否所有选中文件都在同一个 changelist 中
+            const selectedChangelists = new Set<string | undefined>();
+            files.forEach(file => {
+                const fileStatus = this._fileStatuses.find(f => f.path === file);
+                selectedChangelists.add(fileStatus?.changelist);
+            });
+            const uniqueChangelists = Array.from(selectedChangelists);
+            const allInSameChangelist = uniqueChangelists.length === 1 && uniqueChangelists[0] !== undefined;
+
             // 一次性批量提交所有文件和目录
             this.outputChannel.appendLine(`\n[_commitFiles] 开始执行提交操作...`);
-            this.outputChannel.appendLine(`[_commitFiles] 使用批量提交模式 (commitFiles)`);
-            this.outputChannel.appendLine(`[_commitFiles] 批量提交内容:`);
-            this.outputChannel.appendLine(`  - 文件: ${onlyFiles.length} 个`);
-            this.outputChannel.appendLine(`  - 目录: ${directories.length} 个`);
-            this.outputChannel.appendLine(`[_commitFiles] 批量提交列表:`);
-            files.forEach((file, index) => {
-                const isDir = directories.includes(file);
-                this.outputChannel.appendLine(`  ${index + 1}. ${file} ${isDir ? '(目录)' : '(文件)'}`);
-            });
-            
-            try {
-                await this.svnService.commitFiles(files, message, this.folderPath);
-                this.outputChannel.appendLine(`[_commitFiles] ✅ 批量提交成功: ${files.length} 个项目`);
-            } catch (error: any) {
-                // 如果批量提交失败，回退到逐个提交
-                this.outputChannel.appendLine(`[_commitFiles] ❌ 批量提交失败，回退到逐个提交模式`);
-                this.outputChannel.appendLine(`[_commitFiles] 批量提交错误: ${error.message}`);
-                
-                for (let i = 0; i < files.length; i++) {
-                    const file = files[i];
-                    try {
-                        this.outputChannel.appendLine(`[_commitFiles] 逐个提交第 ${i + 1}/${files.length} 个: ${file}`);
-                        await this.svnService.commit(file, message);
-                        this.outputChannel.appendLine(`[_commitFiles] 第 ${i + 1} 个项目提交成功`);
-                    } catch (commitError: any) {
-                        this.outputChannel.appendLine(`[_commitFiles] ❌ 第 ${i + 1} 个项目提交失败: ${file}`);
-                        this.outputChannel.appendLine(`[_commitFiles] 错误信息: ${commitError.message}`);
-                        throw commitError;
-                    }
+
+            if (allInSameChangelist) {
+                const changelistName = uniqueChangelists[0]!;
+                this.outputChannel.appendLine(`[_commitFiles] 所有文件都在同一 changelist "${changelistName}"，使用 changelist 提交模式`);
+                try {
+                    await this.svnService.commitChangelist(this.folderPath, changelistName, message);
+                    this.outputChannel.appendLine(`[_commitFiles] ✅ Changelist 提交成功: ${changelistName}`);
+                } catch (error: any) {
+                    this.outputChannel.appendLine(`[_commitFiles] ❌ Changelist 提交失败，回退到普通提交模式`);
+                    this.outputChannel.appendLine(`[_commitFiles] 错误: ${error.message}`);
+                    await this.svnService.commitFiles(files, message, this.folderPath);
+                    this.outputChannel.appendLine(`[_commitFiles] ✅ 普通提交成功`);
                 }
-                this.outputChannel.appendLine(`[_commitFiles] ✅ 逐个提交完成: ${files.length} 个项目`);
+            } else {
+                this.outputChannel.appendLine(`[_commitFiles] 使用批量提交模式 (commitFiles)`);
+                this.outputChannel.appendLine(`[_commitFiles] 批量提交内容:`);
+                this.outputChannel.appendLine(`  - 文件: ${onlyFiles.length} 个`);
+                this.outputChannel.appendLine(`  - 目录: ${directories.length} 个`);
+                this.outputChannel.appendLine(`[_commitFiles] 批量提交列表:`);
+                files.forEach((file, index) => {
+                    const isDir = directories.includes(file);
+                    this.outputChannel.appendLine(`  ${index + 1}. ${file} ${isDir ? '(目录)' : '(文件)'}`);
+                });
+
+                try {
+                    await this.svnService.commitFiles(files, message, this.folderPath);
+                    this.outputChannel.appendLine(`[_commitFiles] ✅ 批量提交成功: ${files.length} 个项目`);
+                } catch (error: any) {
+                    // 如果批量提交失败，回退到逐个提交
+                    this.outputChannel.appendLine(`[_commitFiles] ❌ 批量提交失败，回退到逐个提交模式`);
+                    this.outputChannel.appendLine(`[_commitFiles] 批量提交错误: ${error.message}`);
+
+                    for (let i = 0; i < files.length; i++) {
+                        const file = files[i];
+                        try {
+                            this.outputChannel.appendLine(`[_commitFiles] 逐个提交第 ${i + 1}/${files.length} 个: ${file}`);
+                            await this.svnService.commit(file, message);
+                            this.outputChannel.appendLine(`[_commitFiles] 第 ${i + 1} 个项目提交成功`);
+                        } catch (commitError: any) {
+                            this.outputChannel.appendLine(`[_commitFiles] ❌ 第 ${i + 1} 个项目提交失败: ${file}`);
+                            this.outputChannel.appendLine(`[_commitFiles] 错误信息: ${commitError.message}`);
+                            throw commitError;
+                        }
+                    }
+                    this.outputChannel.appendLine(`[_commitFiles] ✅ 逐个提交完成: ${files.length} 个项目`);
+                }
             }
 
             // 保存提交日志
@@ -559,11 +623,281 @@ export class SvnFolderCommitPanel {
                     case 'revertFile':
                         await this._revertFile(message.file);
                         return;
+                    case 'revertFiles':
+                        await this._revertFiles(message.files || []);
+                        return;
+                    case 'deleteUnversionedFiles':
+                        await this._deleteUnversionedFiles(message.files);
+                        return;
+                    case 'moveToChangelist':
+                        await this._moveFilesToChangelist(message.files, message.targetChangelist);
+                        return;
+                    case 'promptNewChangelist': {
+                        const files = message.files || [];
+                        if (!files.length) {
+                            return;
+                        }
+                        // 收集已有 changelist 名称，用于去重校验
+                        const existing = new Set<string>();
+                        this._fileStatuses.forEach(fs => { if (fs.changelist) existing.add(fs.changelist); });
+                        this._knownChangelists.forEach(cl => existing.add(cl));
+                        const name = await vscode.window.showInputBox({
+                            prompt: '输入新的 Changelist 名称',
+                            placeHolder: '例如：feature-xxx',
+                            validateInput: v => {
+                                const trimmed = (v || '').trim();
+                                if (!trimmed) return '名称不能为空';
+                                if (existing.has(trimmed)) return '该 Changelist 已存在';
+                                return null;
+                            }
+                        });
+                        if (name && name.trim()) {
+                            await this._moveFilesToChangelist(files, name.trim());
+                        }
+                        return;
+                    }
+                    case 'deleteChangelist':
+                        await this._deleteChangelist(message.changelist);
+                        return;
                 }
             },
             null,
             this._disposables
         );
+    }
+
+    private async _deleteUnversionedFiles(files: string[]): Promise<void> {
+        if (!files || files.length === 0) {
+            vscode.window.showWarningMessage('请先勾选需要删除的 Unversioned 文件');
+            return;
+        }
+
+        // 只允许删除 unversioned 类型文件（按前端勾选过滤）
+        const unversionedPaths = new Set(
+            this._fileStatuses.filter(f => f.type === 'unversioned').map(f => f.path)
+        );
+        const targets = files.filter(p => unversionedPaths.has(p));
+        if (targets.length === 0) {
+            vscode.window.showWarningMessage('勾选的文件中没有 Unversioned 文件');
+            return;
+        }
+
+        const preview = targets.slice(0, 5).map(p => `  • ${p}`).join('\n');
+        const more = targets.length > 5 ? `\n  …还有 ${targets.length - 5} 个` : '';
+        const confirm = await vscode.window.showWarningMessage(
+            `确认删除以下 ${targets.length} 个未版本控制的文件/文件夹？此操作不可恢复。\n\n${preview}${more}`,
+            { modal: true },
+            '删除'
+        );
+        if (confirm !== '删除') {
+            return;
+        }
+
+        const failures: { file: string; error: string }[] = [];
+        const successfulPaths: string[] = [];
+        for (const target of targets) {
+            try {
+                // 检查文件/目录是否存在（可能已被 revert 操作移除）
+                try {
+                    await fs.promises.lstat(target);
+                } catch {
+                    // 文件不存在，视为已成功删除
+                    successfulPaths.push(target);
+                    this.outputChannel.appendLine(`[删除跳过] ${target}: 文件已不存在`);
+                    continue;
+                }
+                const stat = await fs.promises.lstat(target);
+                if (stat.isDirectory()) {
+                    await fs.promises.rm(target, { recursive: true, force: true });
+                } else {
+                    await fs.promises.unlink(target);
+                }
+                successfulPaths.push(target);
+                this.outputChannel.appendLine(`[删除成功] ${target}`);
+            } catch (err: any) {
+                const msg = err && err.message ? err.message : String(err);
+                failures.push({ file: target, error: msg });
+                this.outputChannel.appendLine(`[删除失败] ${target}: ${msg}`);
+            }
+        }
+        const successCount = successfulPaths.length;
+
+        if (failures.length === 0) {
+            vscode.window.showInformationMessage(`已删除 ${successCount} 个未版本控制的文件/文件夹`);
+        } else {
+            vscode.window.showErrorMessage(
+                `删除完成：成功 ${successCount} 个，失败 ${failures.length} 个。详见 OUTPUT 面板。`
+            );
+            this.outputChannel.show(true);
+        }
+
+        // 乐观更新本地 _fileStatuses，避免再次 svn status 访问
+        if (successfulPaths.length > 0) {
+            const removedSet = new Set(successfulPaths);
+            this._fileStatuses = this._fileStatuses.filter(fs => !removedSet.has(fs.path));
+        }
+
+        // 直接重绘 webview，不重新执行 svn status
+        this._panel.webview.html = await this._getHtmlForWebview();
+    }
+
+    /**
+     * 拖拽：移动文件到指定 changelist（targetChangelist 为空表示移出到 Changes）
+     * - 已纳入版本控制的文件直接切换 changelist
+     * - Unversioned 文件会先 svn add 加入版本控制，再（若有目标）加入 changelist
+     */
+    private async _moveFilesToChangelist(files: string[], targetChangelist: string | null | undefined): Promise<void> {
+        if (!files || files.length === 0) {
+            return;
+        }
+
+        const fileMap = new Map(this._fileStatuses.map(f => [f.path, f] as [string, FileStatus]));
+        const targets = files.filter(p => fileMap.has(p));
+        if (targets.length === 0) {
+            return;
+        }
+
+        // 过滤掉已经在目标 changelist 的已纳入版本控制文件（Unversioned 必须执行）
+        const normalizedTarget = (targetChangelist && targetChangelist.trim()) ? targetChangelist.trim() : null;
+        const toMove = targets.filter(p => {
+            const f = fileMap.get(p)!;
+            if (f.type === 'unversioned') return true; // unversioned 必须执行 add
+            const current = f.changelist || null;
+            return current !== normalizedTarget;
+        });
+
+        if (toMove.length === 0) {
+            return;
+        }
+
+        const failures: { file: string; error: string }[] = [];
+        const successfulTargets: string[] = [];
+        let addedCount = 0;
+        for (const target of toMove) {
+            const f = fileMap.get(target)!;
+            try {
+                // Unversioned 文件先加入版本控制
+                if (f.type === 'unversioned') {
+                    await this.svnService.addFile(target);
+                    addedCount++;
+                    this.outputChannel.appendLine(`[svn add] ${target}`);
+                }
+                // 再执行 changelist 操作
+                if (normalizedTarget) {
+                    await this.svnService.addToChangelist(target, normalizedTarget);
+                } else if (f.type !== 'unversioned') {
+                    // 已纳入版本控制且目标是 Changes → 移出 changelist
+                    await this.svnService.removeFromChangelist(target);
+                }
+                // 如果原本是 unversioned 且目标是 Changes，只执行了 svn add，无需再移出 changelist
+                successfulTargets.push(target);
+            } catch (err: any) {
+                const msg = err && err.message ? err.message : String(err);
+                failures.push({ file: target, error: msg });
+                this.outputChannel.appendLine(`[Changelist 移动失败] ${target}: ${msg}`);
+            }
+        }
+        const successCount = successfulTargets.length;
+
+        // 乐观更新本地 _fileStatuses，避免再次 svn status 访问
+        if (successCount > 0) {
+            const targetSet = new Set(successfulTargets);
+            this._fileStatuses = this._fileStatuses.map(fs => {
+                if (!targetSet.has(fs.path)) return fs;
+                if (fs.type === 'unversioned') {
+                    // Unversioned → Added，同时更新 changelist
+                    return {
+                        ...fs,
+                        type: 'added' as const,
+                        status: this._getStatusText('A'),
+                        changelist: normalizedTarget || undefined
+                    };
+                }
+                return {
+                    ...fs,
+                    changelist: normalizedTarget || undefined
+                };
+            });
+            // 登记新目标 changelist（包含新建）
+            if (normalizedTarget) {
+                this._knownChangelists.add(normalizedTarget);
+            }
+        }
+
+        const targetLabel = normalizedTarget ? `changelist “${normalizedTarget}”` : 'Changes';
+        const addInfo = addedCount > 0 ? `（其中 ${addedCount} 个 unversioned 文件已加入版本控制）` : '';
+        if (failures.length === 0) {
+            vscode.window.showInformationMessage(`已将 ${successCount} 个文件移动到 ${targetLabel}${addInfo}`);
+        } else {
+            vscode.window.showErrorMessage(
+                `移动完成：成功 ${successCount} 个，失败 ${failures.length} 个。详见 OUTPUT 面板。`
+            );
+            this.outputChannel.show(true);
+        }
+
+        // 直接重绘 webview，不重新执行 svn status
+        this._panel.webview.html = await this._getHtmlForWebview();
+    }
+
+    /**
+     * 删除指定 changelist：将其中所有文件移入 Changes（即执行 removeFromChangelist），
+     * 然后从本地已知 changelist 集合移除该名称。不调用 svn status，直接重绘。
+     */
+    private async _deleteChangelist(changelistName: string | undefined): Promise<void> {
+        const name = (changelistName || '').trim();
+        if (!name) {
+            return;
+        }
+
+        const filesInCL = this._fileStatuses.filter(fs => fs.changelist === name);
+        const confirm = await vscode.window.showWarningMessage(
+            filesInCL.length > 0
+                ? `确定删除 Changelist “${name}”？其中的 ${filesInCL.length} 个文件将被移回 Changes。`
+                : `确定删除空 Changelist “${name}”？`,
+            { modal: true },
+            '删除'
+        );
+        if (confirm !== '删除') {
+            return;
+        }
+
+        const failures: { file: string; error: string }[] = [];
+        const successfulPaths: string[] = [];
+        for (const f of filesInCL) {
+            try {
+                await this.svnService.removeFromChangelist(f.path);
+                successfulPaths.push(f.path);
+            } catch (err: any) {
+                const msg = err && err.message ? err.message : String(err);
+                failures.push({ file: f.path, error: msg });
+                this.outputChannel.appendLine(`[删除 Changelist 失败] ${f.path}: ${msg}`);
+            }
+        }
+
+        // 乐观更新本地文件：将成功移出的文件 changelist 清空
+        if (successfulPaths.length > 0) {
+            const pathSet = new Set(successfulPaths);
+            this._fileStatuses = this._fileStatuses.map(fs =>
+                pathSet.has(fs.path) ? { ...fs, changelist: undefined } : fs
+            );
+        }
+
+        // 仅在全部移出成功（或原本就是空的）的情况下才移除已知集合
+        if (failures.length === 0) {
+            this._knownChangelists.delete(name);
+            vscode.window.showInformationMessage(
+                filesInCL.length > 0
+                    ? `已删除 Changelist “${name}”，${filesInCL.length} 个文件已移回 Changes`
+                    : `已删除空 Changelist “${name}”`
+            );
+        } else {
+            vscode.window.showErrorMessage(
+                `删除完成：成功移出 ${successfulPaths.length} 个，失败 ${failures.length} 个。Changelist 未完全移除，详见 OUTPUT 面板。`
+            );
+            this.outputChannel.show(true);
+        }
+
+        this._panel.webview.html = await this._getHtmlForWebview();
     }
 
     private async _applyPrefix(commitMessage: string): Promise<string> {
@@ -591,9 +925,10 @@ export class SvnFolderCommitPanel {
             // 准备模板变量
             const templateVariables = {
                 FILTER_INFO: this._renderFilterInfo(),
+                GROUP_FILTER_TAGS: this._renderGroupFilter(this._fileStatuses),
                 FILE_LIST: this._renderFileList(this._fileStatuses),
-                PREFIX_OPTIONS: this._renderPrefixOptions(),
-                LATEST_PREFIX: this.logStorage.getLatestPrefix()
+                PREFIX_OPTIONS: this._renderHistoryOptions(),
+                LAST_COMMIT_MESSAGE: this._getLastCommitMessage()
             };
 
             // 使用内联模板（CSS 和 JS 内嵌在 HTML 中）
@@ -648,60 +983,208 @@ export class SvnFolderCommitPanel {
     }
 
     private _renderFileList(files: FileStatus[]): string {
-        return files.map(file => {
-            // 转义文件路径中的特殊字符
-            const escapedPath = file.path
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&apos;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;');
-            
-            const fileName = path.basename(file.displayName);
-            const filePath = path.dirname(file.displayName);
-            
-            const escapedFileName = fileName.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-            const escapedFilePath = filePath.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        // 1. 分离三类文件：有 changelist 的、无 changelist 的版本控制文件、未版本控制文件
+        const changelistGroups = new Map<string, FileStatus[]>();
+        const changesFiles: FileStatus[] = [];
+        const unversionedFiles: FileStatus[] = [];
 
-            // 根据状态设置不同的样式类
-            let statusClass = file.type;
-            if (file.status.includes('冲突')) {
-                statusClass = 'conflict';
-            } else if (file.status.includes('丢失')) {
-                statusClass = 'missing';
+        files.forEach(file => {
+            if (file.type === 'unversioned') {
+                unversionedFiles.push(file);
+            } else if (file.changelist) {
+                if (!changelistGroups.has(file.changelist)) {
+                    changelistGroups.set(file.changelist, []);
+                }
+                changelistGroups.get(file.changelist)!.push(file);
+            } else {
+                changesFiles.push(file);
             }
+        });
 
-            // 确定是否显示恢复按钮（只在文件是已修改、已删除或丢失状态时显示）
-            const showRevertButton = file.type === 'modified' || file.type === 'deleted' || file.type === 'missing';
+        let html = '';
 
-            return `
-                <div class="file-item status-${statusClass}" 
-                     data-path="${escapedPath}"
-                     data-type="${file.type}">
-                    <span class="checkbox-cell">
-                        <input type="checkbox" class="file-checkbox">
-                    </span>
-                    <span class="file-name" title="${escapedFileName}">${escapedFileName}</span>
-                    <span class="file-path" title="${escapedFilePath}">${escapedFilePath}</span>
-                    <span class="file-status" title="${file.status}">${file.status}</span>
-                    <span class="file-action">
-                        ${file.type !== 'deleted' && file.type !== 'missing' ? `
-                            <button class="diff-button" title="查看内联差异">差异</button>
-                            <button class="side-by-side-button" title="${file.type === 'modified' ? '查看左右对比' : '打开文件'}">${file.type === 'modified' ? '对比' : '打开'}</button>
-                        ` : ''}
-                        ${showRevertButton ? `
-                            <button class="revert-button" title="恢复文件修改">恢复</button>
-                        ` : ''}
-                    </span>
+        // 2. Changes 分组始终显示在最上面（即使为空）
+        html += this._renderGroup('changes', 'Changes', changesFiles);
+
+        // 3. changelist：合并“当前有文件的”与“已知的（可能为空）”，按名称排序
+        const allChangelistNames = new Set<string>([
+            ...changelistGroups.keys(),
+            ...this._knownChangelists
+        ]);
+        const sortedChangelists = Array.from(allChangelistNames).sort();
+        for (const changelist of sortedChangelists) {
+            const groupFiles = changelistGroups.get(changelist) || [];
+            html += this._renderGroup('changelist', changelist, groupFiles);
+        }
+
+        // 4. 未版本控制文件 → “Unversioned Files” 分组
+        if (unversionedFiles.length > 0) {
+            html += this._renderGroup('unversioned', 'Unversioned Files', unversionedFiles);
+        }
+
+        return html;
+    }
+
+    private _renderGroup(groupType: 'changelist' | 'changes' | 'unversioned', title: string, files: FileStatus[]): string {
+        const groupChangelist = groupType === 'changelist' ? title : (groupType === 'changes' ? '__changes__' : '__unversioned__');
+        const groupHtml = files.map(file => this._renderFileItem(file, groupChangelist)).join('');
+
+        let icon = '📁';
+        let cssClass = 'changelist-group';
+        if (groupType === 'changes') {
+            icon = '📝';
+            cssClass = 'changelist-group group-changes';
+        } else if (groupType === 'unversioned') {
+            icon = '❓';
+            cssClass = 'changelist-group group-unversioned';
+        }
+
+        const groupId = groupType === 'changelist' ? `cl-${title}` : groupType;
+
+        // changelist 类型在 header 右侧展示删除按钮（样式与 file-item 的 .delete-button 保持一致）
+        const deleteBtn = groupType === 'changelist'
+            ? `<button class="delete-button changelist-delete" title="删除此 Changelist（文件会移入 Changes）">删除</button>`
+            : '';
+
+        return `
+            <div class="${cssClass}" data-group-type="${groupType}" data-group-id="${groupId.replace(/"/g, '&quot;')}" data-changelist="${groupChangelist.replace(/"/g, '&quot;')}">
+                <div class="changelist-header">
+                    <span class="changelist-toggle" title="点击折叠/展开">▼</span>
+                    <input type="checkbox" class="group-select-all" title="全选/取消全选此分组">
+                    <span class="changelist-icon">${icon}</span>
+                    <span class="changelist-name">${title.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</span>
+                    <span class="changelist-count">(${files.length} 个文件)</span>
+                    ${deleteBtn}
                 </div>
-            `;
+                <div class="changelist-files">
+                    ${groupHtml}
+                </div>
+            </div>
+        `;
+    }
+
+    private _renderFileItem(file: FileStatus, changelistOverride?: string): string {
+        // 转义文件路径中的特殊字符
+        const escapedPath = file.path
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&apos;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
+        const fileName = path.basename(file.displayName);
+        const filePath = path.dirname(file.displayName);
+
+        const escapedFileName = fileName.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const escapedFilePath = filePath.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+        // 根据状态设置不同的样式类
+        let statusClass = file.type;
+        if (file.status.includes('冲突')) {
+            statusClass = 'conflict';
+        } else if (file.status.includes('丢失')) {
+            statusClass = 'missing';
+        }
+
+        // 确定是否显示恢复按钮（新增、已修改、已删除或丢失状态都显示）
+        const showRevertButton = file.type === 'modified' || file.type === 'added' || file.type === 'deleted' || file.type === 'missing';
+        // 未版本控制文件显示删除按钮
+        const showDeleteButton = file.type === 'unversioned';
+        // unversioned 文件也允许拖动（拖入 changelist/Changes 时会自动 svn add）
+        const draggable = true;
+
+        const changelistValue = changelistOverride || (file.changelist ? file.changelist.replace(/"/g, '&quot;') : '');
+
+        return `
+            <div class="file-item status-${statusClass}"
+                 data-path="${escapedPath}"
+                 data-type="${file.type}"
+                 data-changelist="${changelistValue}"
+                 data-locked="${file.locked ? 'true' : 'false'}"
+                 ${draggable ? 'draggable="true"' : ''}>
+                <span class="checkbox-cell">
+                    <input type="checkbox" class="file-checkbox">
+                </span>
+                <span class="file-name" title="${escapedFileName}">${escapedFileName}${file.locked ? ' 🔒' : ''}</span>
+                <span class="file-path" title="${escapedFilePath}">${escapedFilePath}</span>
+                <span class="file-status" title="${file.status}${file.locked ? ' (已锁定)' : ''}">${file.status}${file.locked ? '（锁定）' : ''}</span>
+                <span class="file-action">
+                    ${file.type !== 'deleted' && file.type !== 'missing' ? `
+                        <button class="diff-button" title="查看内联差异">差异</button>
+                        <button class="side-by-side-button" title="${file.type === 'modified' ? '查看左右对比' : '打开文件'}">${file.type === 'modified' ? '对比' : '打开'}</button>
+                    ` : ''}
+                    ${showRevertButton ? `
+                        <button class="revert-button" title="恢复文件修改">恢复</button>
+                    ` : ''}
+                    ${showDeleteButton ? `
+                        <button class="delete-button" title="从磁盘彻底删除此文件/文件夹">删除</button>
+                    ` : ''}
+                </span>
+            </div>
+        `;
+    }
+
+    private _renderGroupFilter(files: FileStatus[]): string {
+        const changelists = new Set<string>();
+        let hasChanges = false;
+        let hasUnversioned = false;
+        files.forEach(file => {
+            if (file.type === 'unversioned') { hasUnversioned = true; }
+            else if (file.changelist) { changelists.add(file.changelist); }
+            else { hasChanges = true; }
+        });
+
+        const extensions = new Map<string, number>();
+        files.forEach(file => {
+            const fn = path.basename(file.displayName);
+            const ext = fn.includes('.') ? '.' + (fn.split('.').pop() || '').toLowerCase() : '(无后缀)';
+            extensions.set(ext, (extensions.get(ext) || 0) + 1);
+        });
+
+        let tagsHtml = '';
+
+        // 1. Changelist 分组标签（排在最前面）
+        for (const cl of Array.from(changelists).sort()) {
+            const count = files.filter(f => f.changelist === cl).length;
+            tagsHtml += `<div class="group-tag selected" data-filter-type="group" data-group-value="${cl.replace(/"/g, '&quot;')}" title="点击切换选择状态">📁 ${cl.replace(/</g, '&lt;').replace(/>/g, '&gt;')}<span class="file-count">(${count})</span></div>`;
+        }
+
+        // 2. Changes 标签（始终显示，即使为空）
+        {
+            const count = files.filter(f => f.type !== 'unversioned' && !f.changelist).length;
+            tagsHtml += `<div class="group-tag selected" data-filter-type="group" data-group-value="__changes__" title="点击切换选择状态">📝 Changes<span class="file-count">(${count})</span></div>`;
+        }
+
+        // 3. Unversioned Files 标签
+        if (hasUnversioned) {
+            const count = files.filter(f => f.type === 'unversioned').length;
+            tagsHtml += `<div class="group-tag selected" data-filter-type="group" data-group-value="__unversioned__" title="点击切换选择状态">❓ Unversioned<span class="file-count">(${count})</span></div>`;
+        }
+
+        // 4. 后缀标签（虚线边框区分）
+        for (const [ext, count] of Array.from(extensions.entries()).sort(([a], [b]) => a.localeCompare(b))) {
+            tagsHtml += `<div class="group-tag extension-tag selected" data-filter-type="extension" data-extension="${ext}" title="点击切换选择状态">${ext.replace(/</g, '&lt;')}<span class="file-count">(${count})</span></div>`;
+        }
+
+        return tagsHtml;
+    }
+
+    private _renderHistoryOptions(): string {
+        const logs = this.logStorage.getLogs();
+        return logs.map(log => {
+            // 显示第一行作为选项文本，完整内容作为 value
+            const firstLine = log.message.split('\n')[0].trim();
+            const displayText = firstLine.length > 60 ? firstLine.substring(0, 60) + '...' : firstLine;
+            const escapedValue = log.message.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return `<option value="${escapedValue}">${displayText}</option>`;
         }).join('');
     }
 
-    private _renderPrefixOptions(): string {
-        const prefixes = this.logStorage.getPrefixes();
-        return prefixes.map(prefix => 
-            `<option value="${prefix}">${prefix}</option>`
-        ).join('');
+    private _getLastCommitMessage(): string {
+        const logs = this.logStorage.getLogs();
+        if (logs.length > 0) {
+            return logs[0].message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        return '';
     }
 
     private _getHtmlForDiffView(filePath: string, diff: string): string {
@@ -857,20 +1340,190 @@ export class SvnFolderCommitPanel {
     private async _revertFile(filePath: string): Promise<void> {
         try {
             const result = await vscode.window.showWarningMessage(
-                '确定要恢复此文件的修改吗？此操作不可撤销。',
-                '确定',
-                '取消'
+                '确定要恢复此文件的修改吗？',
+                { modal: true, detail: '此操作不可撤销。' },
+                '确定'
             );
 
             if (result === '确定') {
+                // 记录 revert 前文件所属的 changelist，用于后续移除
+                const targetFile = this._fileStatuses.find(f => f.path === filePath);
+                const originalChangelist = targetFile?.changelist;
+                const originalType = targetFile?.type;
+
+                // 检测是否为目录（用于之后前缀清理子文件）
+                let isDir = false;
+                try { isDir = fs.existsSync(filePath) && fs.statSync(filePath).isDirectory(); } catch { /* ignore */ }
+
                 await this.svnService.revertFile(filePath);
-                vscode.window.showInformationMessage('文件已成功恢复');
-                // 刷新文件状态列表
-                await this._update();
+
+                // 仅对非 added 类型的文件调用 removeFromChangelist
+                // added 文件 revert 后自动变 unversioned，svn 已自动解绑 changelist，再调会报错且浪费一次进程
+                if (originalChangelist && originalType !== 'added') {
+                    try {
+                        await this.svnService.removeFromChangelist(filePath);
+                        this.outputChannel.appendLine(`[revert] 已将文件从 changelist “${originalChangelist}” 中移除: ${filePath}`);
+                    } catch (clErr: any) {
+                        this.outputChannel.appendLine(`[revert] 移出 changelist 失败（可忽略）: ${clErr.message || clErr}`);
+                    }
+                }
+
+                vscode.window.showInformationMessage(
+                    originalChangelist
+                        ? `文件已成功恢复，并从 changelist “${originalChangelist}” 中移除`
+                        : '文件已成功恢复'
+                );
+
+                // 乐观更新：区分 added 的两种来源
+                //  - 手动 svn add 的 (A)：revert 后磁盘仍在 → 保留为 unversioned
+                //  - merge 带来的 (A +)：revert 后磁盘被删 → 直接移除
+                // 其他类型（modified / deleted / missing）一律移除
+                const dirPrefix = isDir ? (filePath.endsWith(path.sep) ? filePath : filePath + path.sep) : null;
+                this._fileStatuses = this._fileStatuses.reduce<FileStatus[]>((acc, fsEntry) => {
+                    if (fsEntry.path === filePath) {
+                        if (originalType === 'added' && fs.existsSync(filePath)) {
+                            acc.push({
+                                ...fsEntry,
+                                type: 'unversioned' as const,
+                                status: this._getStatusText('?'),
+                                changelist: undefined
+                            });
+                        }
+                        return acc;
+                    }
+                    if (dirPrefix && fsEntry.path.startsWith(dirPrefix)) {
+                        if (fsEntry.type === 'added' && fs.existsSync(fsEntry.path)) {
+                            acc.push({
+                                ...fsEntry,
+                                type: 'unversioned' as const,
+                                status: this._getStatusText('?'),
+                                changelist: undefined
+                            });
+                        }
+                        return acc;
+                    }
+                    acc.push(fsEntry);
+                    return acc;
+                }, []);
+
+                // 直接重绘 webview，不重新执行 svn status
+                this._panel.webview.html = await this._getHtmlForWebview();
             }
         } catch (error: any) {
             vscode.window.showErrorMessage(`恢复文件失败: ${error.message}`);
         }
+    }
+
+    private async _revertFiles(filePaths: string[]): Promise<void> {
+        if (!filePaths || filePaths.length === 0) {
+            return;
+        }
+        // 去重 + 且只保留在 _fileStatuses 中存在的文件
+        const pathSet = new Set(filePaths);
+        const targets = this._fileStatuses.filter(f => pathSet.has(f.path));
+        if (targets.length === 0) {
+            return;
+        }
+
+        const confirm = await vscode.window.showWarningMessage(
+            targets.length === 1
+                ? '确定要恢复此文件的修改吗？'
+                : `确定要恢复选中的 ${targets.length} 个文件吗？`,
+            { modal: true, detail: '此操作不可撤销。' },
+            '确定'
+        );
+        if (confirm !== '确定') {
+            return;
+        }
+
+        const startTime = Date.now();
+        const failures: { file: string; error: string }[] = [];
+        const successful: FileStatus[] = [];
+
+        // 批量一次性传给 svn revert（仿 TortoiseSVN，svnService 内部已做路径去重/子路径剔除）
+        // 注意：不再回退到逐个循环执行——那样会触发 N 次 svn 子进程，耗时数分钟
+        try {
+            await this.svnService.revertFiles(targets.map(f => f.path));
+            successful.push(...targets);
+        } catch (err: any) {
+            const msg = err && err.message ? err.message : String(err);
+            this.outputChannel.appendLine(`[revert] 批量恢复失败: ${msg}`);
+            // 整批视为失败（不逐个重试，避免 N 次 svn 进程拖慢整体）
+            for (const f of targets) {
+                failures.push({ file: f.path, error: msg });
+            }
+        }
+
+        // 批量移除 changelist：跳过 added 类型（svn 已自动解绑），一次 SVN 进程完成多文件
+        const clTargets = successful.filter(f => f.changelist && f.type !== 'added');
+        if (clTargets.length > 0) {
+            try {
+                await this.svnService.removeFromChangelistBatch(clTargets.map(f => f.path));
+                this.outputChannel.appendLine(`[revert] 批量移出 changelist，共 ${clTargets.length} 个文件`);
+            } catch (clErr: any) {
+                this.outputChannel.appendLine(`[revert] 批量移出 changelist 失败（可忽略）: ${clErr.message || clErr}`);
+            }
+        }
+
+        const elapsed = Date.now() - startTime;
+        if (failures.length === 0) {
+            vscode.window.showInformationMessage(`已成功恢复 ${successful.length} 个文件（耗时 ${elapsed}ms）`);
+        } else {
+            vscode.window.showErrorMessage(
+                `恢复完成：成功 ${successful.length} 个，失败 ${failures.length} 个。详见 OUTPUT 面板。`
+            );
+            this.outputChannel.show(true);
+        }
+
+        // 乐观更新本地 _fileStatuses：精确命中 + 目录前缀清理子文件
+        const successPathSet = new Set(successful.map(f => f.path));
+        const typeMap = new Map(successful.map(f => [f.path, f.type]));
+
+        // 收集 revert 成功的目录前缀（用于前缀匹配子文件）
+        const dirPrefixes: string[] = [];
+        for (const f of successful) {
+            try {
+                if (fs.existsSync(f.path) && fs.statSync(f.path).isDirectory()) {
+                    dirPrefixes.push(f.path.endsWith(path.sep) ? f.path : f.path + path.sep);
+                }
+            } catch { /* ignore */ }
+        }
+
+        // 乐观更新：区分 added 的两种来源
+        //  - 手动 svn add 的 (A)：revert 后磁盘仍在 → 保留为 unversioned
+        //  - merge 带来的 (A +)：revert 后磁盘被删 → 直接移除
+        // 其他类型（modified / deleted / missing）一律移除
+        this._fileStatuses = this._fileStatuses.reduce<FileStatus[]>((acc, fsEntry) => {
+            // 精确命中的文件
+            if (successPathSet.has(fsEntry.path)) {
+                if (typeMap.get(fsEntry.path) === 'added' && fs.existsSync(fsEntry.path)) {
+                    acc.push({
+                        ...fsEntry,
+                        type: 'unversioned' as const,
+                        status: this._getStatusText('?'),
+                        changelist: undefined
+                    });
+                }
+                return acc;
+            }
+            // 落入 revert 目录前缀的子条目
+            if (dirPrefixes.some(prefix => fsEntry.path.startsWith(prefix))) {
+                if (fsEntry.type === 'added' && fs.existsSync(fsEntry.path)) {
+                    acc.push({
+                        ...fsEntry,
+                        type: 'unversioned' as const,
+                        status: this._getStatusText('?'),
+                        changelist: undefined
+                    });
+                }
+                return acc;
+            }
+            acc.push(fsEntry);
+            return acc;
+        }, []);
+
+        // 直接重绘 webview
+        this._panel.webview.html = await this._getHtmlForWebview();
     }
 
     public dispose() {

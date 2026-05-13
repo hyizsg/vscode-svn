@@ -47,7 +47,7 @@ export class SvnConflictPanel {
 
         // 如果已经有面板，直接显示
         if (SvnConflictPanel.currentPanel) {
-            SvnConflictPanel.currentPanel._panel.reveal(column);
+            SvnConflictPanel.currentPanel._panel.reveal(undefined, true);
             // 重新扫描
             await SvnConflictPanel.currentPanel._startScan();
             return;
@@ -67,6 +67,11 @@ export class SvnConflictPanel {
                 retainContextWhenHidden: true
             }
         );
+
+        // 将 webview 面板移到独立的悬浮窗口
+        setTimeout(() => {
+            vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow').then(undefined, () => { /* 老版本不支持，静默忽略 */ });
+        }, 100);
 
         SvnConflictPanel.currentPanel = new SvnConflictPanel(panel, extensionUri, folderPath, svnService);
     }

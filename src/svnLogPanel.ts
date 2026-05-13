@@ -204,6 +204,11 @@ export class SvnLogPanel {
             }
         );
 
+        // 将 webview 面板移到独立的悬浮窗口
+        setTimeout(() => {
+            vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow').then(undefined, () => { /* 老版本不支持，静默忽略 */ });
+        }, 100);
+
         SvnLogPanel.currentPanel = new SvnLogPanel(panel, extensionUri, targetPath, svnService);
     }
 
@@ -3058,6 +3063,11 @@ export class SvnLogPanel {
                     retainContextWhenHidden: true
                 }
             );
+
+            // 将 webview 面板移到独立的悬浮窗口
+            setTimeout(() => {
+                vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow').then(undefined, () => { /* 老版本不支持，静默忽略 */ });
+            }, 100);
 
             // 设置HTML内容
             panel.webview.html = this._getAIAnalysisHtml(revision, logEntry, analysisResult, fromCache, cacheDate, filterInfo, analyzedFiles);

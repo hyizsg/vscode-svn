@@ -4,12 +4,161 @@ import * as http from 'http'
 
 /**
  * AI服务类，用于生成SVN提交日志
+ * 优先使用 VS Code Language Model API（Qoder/Copilot 等 IDE 内置 AI）
+ * 回退到用户自行配置的 AI 服务
  */
 export class AiService {
   private outputChannel: vscode.OutputChannel;
 
   constructor() {
     this.outputChannel = vscode.window.createOutputChannel('SVN AI 生成提交日志');
+  }
+
+  /**
+   * 尝试使用 VS Code Language Model API（IDE 内置 AI）
+   * 返回 null 表示不可用，需回退到手动配置
+   */
+  private async tryLanguageModelApi(prompt: string): Promise<string | null> {
+    try {
+      // 检查 vscode.lm API 是否可用（VS Code 1.90+）
+      if (!vscode.lm || typeof vscode.lm.selectChatModels !== 'function') {
+        this.outputChannel.appendLine('[tryLanguageModelApi] vscode.lm API 不可用');
+        return null;
+      }
+
+      // 获取所有可用的 chat 模型
+      const allModels = await vscode.lm.selectChatModels();
+      if (!allModels || allModels.length === 0) {
+        this.outputChannel.appendLine('[tryLanguageModelApi] 没有可用的 Language Model');
+        return null;
+      }
+
+      // 记录所有可用模型
+      this.outputChannel.appendLine(`[tryLanguageModelApi] 可用模型列表 (${allModels.length}个):`);
+      allModels.forEach((m, i) => {
+        this.outputChannel.appendLine(`  [${i}] name=${m.name || 'N/A'}, id=${m.id}, vendor=${m.vendor || 'N/A'}, family=${m.family || 'N/A'}`);
+      });
+
+      // 从设置中获取用户指定的模型 ID
+      const config = vscode.workspace.getConfiguration('vscode-svn');
+      const preferredModelId = config.get<string>('aiLanguageModelId', '');
+
+      let model: any = null;
+
+      // 1. 如果用户指定了模型 ID，优先使用
+      if (preferredModelId) {
+        model = allModels.find(m => m.id === preferredModelId);
+        if (model) {
+          this.outputChannel.appendLine(`[tryLanguageModelApi] 使用用户指定模型: ${model.name || model.id}`);
+        } else {
+          this.outputChannel.appendLine(`[tryLanguageModelApi] 用户指定的模型 '${preferredModelId}' 未找到`);
+        }
+      }
+
+      // 2. 如果没有指定或未找到，优先选择非编辑专用的通用模型
+      if (!model) {
+        // 优先选非 qoder-edit-lm-vendor 的模型（通用聊天模型）
+        model = allModels.find(m => m.vendor !== 'qoder-edit-lm-vendor');
+      }
+
+      // 3. 如果都是编辑模型，让用户选择
+      if (!model) {
+        // 弹出选择框让用户选模型
+        const items = allModels.map(m => ({
+          label: m.name || m.id,
+          description: `vendor: ${m.vendor || 'N/A'}, family: ${m.family || 'N/A'}`,
+          model: m
+        }));
+        const picked = await vscode.window.showQuickPick(items, {
+          placeHolder: '请选择用于生成提交日志的 AI 模型',
+          title: 'AI 模型选择'
+        });
+        if (picked) {
+          model = (picked as any).model;
+          // 保存用户选择
+          await config.update('aiLanguageModelId', model.id, vscode.ConfigurationTarget.Global);
+          this.outputChannel.appendLine(`[tryLanguageModelApi] 用户选择并保存模型: ${model.name || model.id}`);
+        } else {
+          this.outputChannel.appendLine('[tryLanguageModelApi] 用户取消了模型选择');
+          return null;
+        }
+      }
+
+      this.outputChannel.appendLine(`[tryLanguageModelApi] 最终使用模型: ${model.name || model.id}, vendor: ${model.vendor || 'unknown'}, family: ${model.family || 'unknown'}`);
+
+      // 根据模型类型构建不同的 prompt
+      const isEditModel = model.vendor === 'qoder-edit-lm-vendor';
+      let messages;
+      if (isEditModel) {
+        // 编辑模型：伪装成代码补全任务
+        messages = [
+          vscode.LanguageModelChatMessage.User(
+            `Complete the following code. The file is a commit message file. ` +
+            `Based on the diff below, write the commit message content in Chinese. ` +
+            `Output ONLY the commit message text, nothing else.`
+          ),
+          vscode.LanguageModelChatMessage.User(
+            `// Diff:\n${prompt}\n\n// Generated commit message:\n`
+          )
+        ];
+      } else {
+        // 通用聊天模型：标准 prompt
+        messages = [
+          vscode.LanguageModelChatMessage.User(
+            `根据以下代码差异，生成简洁的中文提交日志。只输出提交日志内容，不要解释。\n\n${prompt}`
+          )
+        ];
+      }
+
+      // 创建 cancellation token
+      const cts = new vscode.CancellationTokenSource();
+
+      this.outputChannel.appendLine(`[tryLanguageModelApi] 正在发送${isEditModel ? '编辑' : '聊天'}请求...`);
+      let response: any;
+      try {
+        response = await model.sendRequest(
+          messages,
+          { justification: 'SVN 提交日志生成' },
+          cts.token
+        );
+      } catch (sendError: any) {
+        this.outputChannel.appendLine(`[tryLanguageModelApi] sendRequest 异常: ${sendError.message}`);
+        cts.dispose();
+        return null;
+      }
+
+      this.outputChannel.appendLine(`[tryLanguageModelApi] 收到 response, keys: ${response ? Object.keys(response).join(',') : 'null'}`);
+
+      // 收集流式响应
+      let result = '';
+      if (response && response.text) {
+        for await (const chunk of response.text) {
+          result += chunk;
+        }
+        this.outputChannel.appendLine(`[tryLanguageModelApi] text 迭代完成，总长度: ${result.length}`);
+      } else if (response && response.stream) {
+        for await (const chunk of response.stream) {
+          if (typeof chunk === 'string') {
+            result += chunk;
+          } else if (chunk && chunk.value) {
+            result += chunk.value;
+          }
+        }
+        this.outputChannel.appendLine(`[tryLanguageModelApi] stream 迭代完成，总长度: ${result.length}`);
+      }
+
+      cts.dispose();
+
+      if (result.trim()) {
+        this.outputChannel.appendLine(`[tryLanguageModelApi] 成功生成，内容: ${result.trim().substring(0, 200)}`);
+        return result.trim();
+      }
+      this.outputChannel.appendLine('[tryLanguageModelApi] 响应为空');
+      return null;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[tryLanguageModelApi] 调用失败: ${error.message}`);
+      return null;
+    }
   }
 
   /**
@@ -319,14 +468,26 @@ export class AiService {
 
   /**
    * 生成SVN提交日志
+   * 优先使用 IDE 内置 AI（Qoder/Copilot），无需额外配置
+   * 回退到用户配置的 AI 服务
    * @param diffContent SVN差异内容
    * @returns 生成的提交日志
    */
   public async generateCommitMessage(diffContent: string): Promise<string> {
     try {
-      // 检查配置
+      const prompt = this.preparePrompt(diffContent);
+  
+      // 策略一：尝试使用 IDE 内置 AI（Qoder 等）
+      const lmResult = await this.tryLanguageModelApi(prompt);
+      if (lmResult) {
+        this.outputChannel.appendLine('[generateCommitMessage] 使用 IDE 内置 AI 生成成功');
+        return lmResult;
+      }
+  
+      // 策略二：回退到用户配置的 AI 服务
+      this.outputChannel.appendLine('[generateCommitMessage] IDE 内置 AI 不可用，回退到用户配置');
       let aiConfig = this.checkAiConfig();
-      
+        
       // 如果配置不完整，引导用户配置
       if (!aiConfig) {
         aiConfig = await this.configureAI();
@@ -334,12 +495,10 @@ export class AiService {
           return '';
         }
       }
-
-      // 准备发送给AI的提示
-      const prompt = this.preparePrompt(diffContent);
+  
       this.outputChannel.appendLine(`[generateCommitMessage] 使用AI服务: ${aiConfig.apiUrl}`);
       this.outputChannel.appendLine(`[generateCommitMessage] 使用模型: ${aiConfig.modelId}`);
-      
+        
       // 显示进度提示
       return await vscode.window.withProgress({
         location: vscode.ProgressLocation.Notification,
@@ -347,28 +506,27 @@ export class AiService {
         cancellable: false
       }, async (progress) => {
         progress.report({ increment: 30 });
-        
+          
         const response = await this.callAiApi(prompt, aiConfig!);
-        
+          
         progress.report({ increment: 70 });
-        
+          
         return response;
       });
     } catch (error: any) {
       this.outputChannel.appendLine(`[generateCommitMessage] AI调用失败: ${error.message}`);
-      
+        
       // AI调用失败，询问是否重新配置
       const choice = await vscode.window.showErrorMessage(
         `❌ AI生成提交日志失败\n\n错误信息: ${error.message}\n\n可能原因：\n• AI服务配置错误\n• 网络连接问题\n• API配额不足\n• 模型不支持`,
         { modal: true },
-        '🔧 重新配置AI',
+        '🔧 重新配置 AI',
         '🔄 重试',
         '❌ 取消'
       );
-      
-      if (choice === '🔧 重新配置AI') {
+        
+      if (choice === '🔧 重新配置 AI') {
         await this.handleConfigurationRetry();
-        // 重新配置后，重新尝试生成（最多重试一次）
         const newConfig = this.checkAiConfig();
         if (newConfig) {
           try {
@@ -380,7 +538,6 @@ export class AiService {
           }
         }
       } else if (choice === '🔄 重试') {
-        // 直接重试一次
         try {
           const aiConfig = this.checkAiConfig();
           if (aiConfig) {
@@ -395,7 +552,7 @@ export class AiService {
           return '';
         }
       }
-      
+        
       return '';
     }
   }
