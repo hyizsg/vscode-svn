@@ -544,9 +544,14 @@ export class SvnService {
    */
   public async isSvnInstalled(): Promise<boolean> {
     try {
-      await exec('svn --version');
+      // 使用增强环境变量执行 svn --version，避免在 macOS 上 extension host
+      // 的 PATH 缺少 /opt/homebrew/bin、/usr/local/bin 等导致的误判
+      const env = this.getEnhancedEnvironment();
+      await exec('svn --version --quiet', { env });
       return true;
-    } catch (error) {
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[isSvnInstalled] 检测 svn 命令失败: ${error && error.message ? error.message : error}`);
+      this.outputChannel.appendLine(`[isSvnInstalled] 当前 PATH=${process.env.PATH || ''}`);
       return false;
     }
   }
@@ -606,15 +611,26 @@ export class SvnService {
     try {
       // 首先尝试直接使用svn info命令
       try {
-        // 特殊处理：如果路径包含@符号，需要在路径后添加额外的@来转义
-        let targetPath = fsPath;
-        if (fsPath.includes('@')) {
-          targetPath = `${fsPath}@`;
+        // 关键修复：executeSvnCommand 的第二个参数是 cwd（工作目录），
+        // 之前直接把 fsPath 传过去，当 fsPath 是文件时会被 cp.exec 当作 cwd，
+        // 触发 ENOTDIR，导致永远返回 false。
+        // 这里统一以路径所在目录作为 cwd，把目标路径作为 svn info 的参数。
+        let stat: fs.Stats | undefined;
+        try {
+          stat = fs.statSync(fsPath);
+        } catch {
+          // 路径不存在或无法访问
+          return false;
         }
-        
-        await this.executeSvnCommand('info', targetPath);
+        const cwd = stat.isDirectory() ? fsPath : path.dirname(fsPath);
+        const target = stat.isDirectory() ? '.' : path.basename(fsPath);
+        // 特殊处理：如果路径包含@符号，需要在路径后添加额外的@来转义
+        const escapedTarget = target.includes('@') ? `${target}@` : target;
+
+        await this.executeSvnCommand(`info "${escapedTarget}"`, cwd);
         return true;
-      } catch (error) {
+      } catch (error: any) {
+        this.outputChannel.appendLine(`[isInWorkingCopy] 直接检查失败: ${error && error.message ? error.message : error}`);
         // 如果直接检查失败，并且有自定义SVN根目录，则使用自定义根目录
         if (this.getCustomSvnRoot()) {
           // 获取相对于自定义SVN根目录的路径

@@ -158,11 +158,13 @@
       },
       {
         "command": "vscode-svn.lockFile",
-        "title": "SVN: 锁定文件"
+        "title": "Lock",
+        "category": "SVN"
       },
       {
         "command": "vscode-svn.unlockFile",
-        "title": "SVN: 解锁文件"
+        "title": "Unlock",
+        "category": "SVN"
       },
       {
         "command": "vscode-svn.showLockInfo",
@@ -235,7 +237,9 @@
       { "command": "vscode-svn.cleanup.zh",                "title": "清理",             "category": "SVN" },
       { "command": "vscode-svn.switch.zh",                 "title": "切换",             "category": "SVN" },
       { "command": "vscode-svn.mergeBranch.zh",            "title": "合并分支",         "category": "SVN" },
-      { "command": "vscode-svn.addItem.zh",                "title": "添加",             "category": "SVN" }
+      { "command": "vscode-svn.addItem.zh",                "title": "添加",             "category": "SVN" },
+      { "command": "vscode-svn.lockFile.zh",               "title": "锁定文件",         "category": "SVN" },
+      { "command": "vscode-svn.unlockFile.zh",             "title": "解锁文件",         "category": "SVN" }
     ],
     "submenus": [
       {
@@ -275,6 +279,10 @@
         { "command": "vscode-svn.revertFile.zh",              "when": "resourceScheme == file && !explorerResourceIsFolder && !explorerResourceIsRoot && config.vscode-svn.language == 'zh'", "group": "1_main@5" },
         { "command": "vscode-svn.blame",                      "when": "resourceScheme == file && !explorerResourceIsFolder && !explorerResourceIsRoot && config.vscode-svn.language != 'zh'", "group": "1_main@6" },
         { "command": "vscode-svn.blame.zh",                   "when": "resourceScheme == file && !explorerResourceIsFolder && !explorerResourceIsRoot && config.vscode-svn.language == 'zh'", "group": "1_main@6" },
+        { "command": "vscode-svn.lockFile",                   "when": "resourceScheme == file && !explorerResourceIsFolder && !explorerResourceIsRoot && config.vscode-svn.language != 'zh'", "group": "1_main@7" },
+        { "command": "vscode-svn.lockFile.zh",                "when": "resourceScheme == file && !explorerResourceIsFolder && !explorerResourceIsRoot && config.vscode-svn.language == 'zh'", "group": "1_main@7" },
+        { "command": "vscode-svn.unlockFile",                 "when": "resourceScheme == file && !explorerResourceIsFolder && !explorerResourceIsRoot && config.vscode-svn.language != 'zh'", "group": "1_main@8" },
+        { "command": "vscode-svn.unlockFile.zh",              "when": "resourceScheme == file && !explorerResourceIsFolder && !explorerResourceIsRoot && config.vscode-svn.language == 'zh'", "group": "1_main@8" },
         { "command": "vscode-svn.viewLog",                    "when": "(explorerResourceIsFolder || explorerResourceIsRoot) && config.vscode-svn.language != 'zh'", "group": "1_main@1" },
         { "command": "vscode-svn.viewLog.zh",                 "when": "(explorerResourceIsFolder || explorerResourceIsRoot) && config.vscode-svn.language == 'zh'", "group": "1_main@1" },
         { "command": "vscode-svn.scanAndResolveConflicts",    "when": "(explorerResourceIsFolder || explorerResourceIsRoot) && config.vscode-svn.language != 'zh'", "group": "1_main@2" },
@@ -342,7 +350,9 @@
         { "command": "vscode-svn.cleanup.zh",                "when": "false" },
         { "command": "vscode-svn.switch.zh",                 "when": "false" },
         { "command": "vscode-svn.mergeBranch.zh",            "when": "false" },
-        { "command": "vscode-svn.addItem.zh",                "when": "false" }
+        { "command": "vscode-svn.addItem.zh",                "when": "false" },
+        { "command": "vscode-svn.lockFile.zh",               "when": "false" },
+        { "command": "vscode-svn.unlockFile.zh",             "when": "false" }
       ]
     },
     "configuration": {

@@ -500,14 +500,14 @@ async function viewSvnLog(fsPath: string): Promise<void> {
   try {
     // 检查SVN是否已安装
     if (!await svnService.isSvnInstalled()) {
-      vscode.window.showErrorMessage('未检测到SVN命令行工具，请确保已安装SVN并添加到系统PATH中');
+      vscode.window.showErrorMessage('未检测到SVN命令行工具，请确保已安装SVN并添加到系统PATH中（详细信息可查看输出面板 “SVN”）');
       return;
     }
     
-    // 检查文件是否在SVN工作副本中
+    // 检查路径是否在SVN工作副本中
     if (!await svnService.isInWorkingCopy(fsPath)) {
       const result = await vscode.window.showErrorMessage(
-        '该文件不在SVN工作副本中',
+        `该路径不在SVN工作副本中: ${fsPath}`,
         '设置SVN工作副本路径',
         '取消'
       );
@@ -2152,7 +2152,9 @@ export function activate(context: vscode.ExtensionContext) {
     ['vscode-svn.cleanup',                 'vscode-svn.cleanup.zh'],
     ['vscode-svn.switch',                  'vscode-svn.switch.zh'],
     ['vscode-svn.mergeBranch',             'vscode-svn.mergeBranch.zh'],
-    ['vscode-svn.addItem',                 'vscode-svn.addItem.zh']
+    ['vscode-svn.addItem',                 'vscode-svn.addItem.zh'],
+    ['vscode-svn.lockFile',                'vscode-svn.lockFile.zh'],
+    ['vscode-svn.unlockFile',              'vscode-svn.unlockFile.zh']
   ];
   const zhAliasDisposables = zhAliasPairs.map(([origin, alias]) =>
     vscode.commands.registerCommand(alias, (...args: any[]) => vscode.commands.executeCommand(origin, ...args))
