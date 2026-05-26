@@ -79,6 +79,60 @@
         });
     }
     
+    // ========== 右键菜单工具函数 ==========
+    let activeContextMenu = null;
+    
+    function closeContextMenu() {
+        if (activeContextMenu) {
+            activeContextMenu.remove();
+            activeContextMenu = null;
+        }
+    }
+    
+    function createContextMenu(x, y, items) {
+        closeContextMenu();
+        const menu = document.createElement('div');
+        menu.className = 'context-menu';
+        
+        items.forEach(item => {
+            if (item.separator) {
+                const sep = document.createElement('div');
+                sep.className = 'context-menu-separator';
+                menu.appendChild(sep);
+                return;
+            }
+            const menuItem = document.createElement('div');
+            menuItem.className = 'context-menu-item' + (item.disabled ? ' disabled' : '');
+            menuItem.innerHTML = '<span class="context-menu-icon">' + (item.icon || '') + '</span><span>' + item.label + '</span>';
+            if (!item.disabled && item.action) {
+                menuItem.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    closeContextMenu();
+                    item.action();
+                });
+            }
+            menu.appendChild(menuItem);
+        });
+        
+        document.body.appendChild(menu);
+        activeContextMenu = menu;
+        
+        // 调整位置防止超出视口
+        const rect = menu.getBoundingClientRect();
+        if (x + rect.width > window.innerWidth) {
+            x = window.innerWidth - rect.width - 5;
+        }
+        if (y + rect.height > window.innerHeight) {
+            y = window.innerHeight - rect.height - 5;
+        }
+        menu.style.left = x + 'px';
+        menu.style.top = y + 'px';
+    }
+    
+    // 点击任意位置关闭右键菜单
+    document.addEventListener('click', closeContextMenu);
+    document.addEventListener('contextmenu', closeContextMenu);
+    
     // 更新日志数量显示
     function updateLogCountDisplay(count, isFiltered, hasMoreLogs, filterDescription) {
         debugLog('更新日志数量显示: count=' + count + ', isFiltered=' + isFiltered + ', hasMoreLogs=' + hasMoreLogs + ', filterDescription=' + (filterDescription || '无'));
@@ -177,7 +231,7 @@
                     });
                 }
                 
-                renderLogList(logEntries);
+                renderLogList(logEntries, message.isLoadingMore, message.hasMoreLogs);
                 break;
             case 'updateSvnRelativePath':
                 targetSvnRelativePath = message.targetSvnRelativePath;
@@ -261,9 +315,12 @@
         }
     });
     
-    // 渲染日志列表
-    function renderLogList(entries) {
-        debugLog('渲染日志列表');
+    // 渲染日志列表（表格行式 + 右键菜单）
+    function renderLogList(entries, isLoadingMore, hasMoreLogs) {
+        debugLog('渲染日志列表' + (isLoadingMore ? '(加载更多)' : ''));
+            
+        // 加载更多时保存当前滚动位置
+        var savedScrollTop = isLoadingMore ? logList.scrollTop : 0;
         if (!entries || entries.length === 0) {
             logList.innerHTML = `
                 <div class="empty-state">
@@ -274,67 +331,76 @@
             return;
         }
         
-        let html = '';
+        // 列头
+        let html = '<div class="log-list-columns"><span>Revision</span><div class="col-meta"><span>Author</span><span>Date</span></div></div>';
         
         entries.forEach(entry => {
             const isSelected = entry.revision === selectedRevision;
             const isNewerThanLocal = entry.isNewerThanLocal;
-            const messagePreview = entry.message.length > 100 
-                ? entry.message.substring(0, 100) + '...' 
-                : entry.message;
+            const msgPreview = (entry.message || '').replace(/\n/g, ' ').substring(0, 80);
+            const newerBadge = isNewerThanLocal ? '<span style="background:#ff9800;color:#fff;font-size:0.75em;padding:1px 4px;border-radius:3px;margin-left:4px;">未更新</span>' : '';
             
-            // 为版本号旁边的标记定义新样式
-            const inlineNewerBadge = isNewerThanLocal ? 
-                '<span style="display: inline-block; background-color: #ff9800; color: white; font-size: 0.8em; padding: 1px 5px; border-radius: 3px; margin-left: 5px; vertical-align: middle;">未更新</span>' : 
-                '';
-            
-            html += `
-                <div class="log-entry ${isSelected ? 'selected' : ''} ${isNewerThanLocal ? 'newer-than-local' : ''}" data-revision="${entry.revision}">
-                    <div class="log-header">
-                        <span class="log-revision">修订版本 ${entry.revision} ${inlineNewerBadge}</span>
-                        <span class="log-author">${entry.author}</span>
-                    </div>
-                    <div class="log-date">${entry.date}</div>
-                    <div class="log-message">${messagePreview}</div>
-                </div>
-            `;
+            html += '<div class="log-entry ' + (isSelected ? 'selected' : '') + ' ' + (isNewerThanLocal ? 'newer-than-local' : '') + '" data-revision="' + entry.revision + '" data-message="' + entry.message.replace(/"/g, '&quot;').replace(/</g, '&lt;') + '">' +
+                '<div class="log-revision-cell">r' + entry.revision + newerBadge + '</div>' +
+                '<div class="log-meta-row"><span>' + entry.author + '</span><span>' + entry.date + '</span></div>' +
+                '<div class="log-message-row" title="' + entry.message.replace(/"/g, '&quot;').replace(/</g, '&lt;') + '">' + msgPreview + '</div>' +
+            '</div>';
         });
         
-        html += `
-            <div class="load-more">
-                <button id="loadMoreButton">加载更多</button>
-            </div>
-        `;
-        
+        if (hasMoreLogs !== false) {
+            html += '<div class="load-more"><button id="loadMoreButton">加载更多</button></div>';
+        } else {
+            html += '<div class="load-more" style="color:var(--vscode-descriptionForeground);padding:8px;text-align:center;">已加载全部历史记录</div>';
+        }
         logList.innerHTML = html;
         debugLog('日志列表渲染完成');
         
-        // 添加点击事件
+        // 单击选中事件
         document.querySelectorAll('.log-entry').forEach(entry => {
             entry.addEventListener('click', () => {
                 const revision = entry.getAttribute('data-revision');
                 selectedRevision = revision;
                 debugLog('选择修订版本: ' + revision);
-                
-                // 更新选中状态
-                document.querySelectorAll('.log-entry').forEach(e => {
-                    e.classList.remove('selected');
-                });
+                document.querySelectorAll('.log-entry').forEach(e => e.classList.remove('selected'));
                 entry.classList.add('selected');
+                vscode.postMessage({ command: 'selectRevision', revision: revision });
+            });
+            
+            // 右键菜单
+            entry.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const revision = entry.getAttribute('data-revision');
+                const message = entry.getAttribute('data-message') || '';
                 
-                // 发送消息到扩展
-                vscode.postMessage({
-                    command: 'selectRevision',
-                    revision: revision
-                });
+                // 先选中该行
+                selectedRevision = revision;
+                document.querySelectorAll('.log-entry').forEach(el => el.classList.remove('selected'));
+                entry.classList.add('selected');
+                vscode.postMessage({ command: 'selectRevision', revision: revision });
+                
+                createContextMenu(e.clientX, e.clientY, [
+                    { icon: '📄', label: '与前一版本比较 (Show Changes)', action: () => vscode.postMessage({ command: 'viewRevisionDiff', revision: revision }) },
+                    { icon: '🔄', label: '与工作副本比较', action: () => vscode.postMessage({ command: 'compareWithWorkingCopy', revision: revision }) },
+                    { icon: '⬇️', label: '更新到此版本', action: () => vscode.postMessage({ command: 'updateToRevision', revision: revision }) },
+                    { icon: '↩️', label: '回滚此版本更改', action: () => vscode.postMessage({ command: 'revertToRevision', revision: revision }) },
+                    { separator: true },
+                    { icon: '🌿', label: '从此版本创建分支/标签', action: () => vscode.postMessage({ command: 'createBranchFromRevision', revision: revision }) },
+                    { icon: '💾', label: '导出此版本 Diff', action: () => vscode.postMessage({ command: 'exportRevisionDiff', revision: revision }) },
+                    { separator: true },
+                    { icon: '📝', label: '复制修订版本号', action: () => vscode.postMessage({ command: 'copyRevisionNumber', revision: revision }) },
+                    { icon: '📋', label: '复制提交信息', action: () => vscode.postMessage({ command: 'copyLogMessage', revision: revision, message: message }) },
+                    { icon: '📂', label: '浏览此版本仓库', action: () => vscode.postMessage({ command: 'browseRevisionRepo', revision: revision }) },
+                ]);
             });
         });
         
-        // 如果有选中的修订版本，滚动到选中的条目
-        if (selectedRevision) {
+        // 加载更多时恢复滚动位置，否则滚动到选中项
+        if (isLoadingMore && savedScrollTop > 0) {
+            logList.scrollTop = savedScrollTop;
+        } else if (selectedRevision) {
             const selectedEntry = document.querySelector('.log-entry[data-revision="' + selectedRevision + '"]');
             if (selectedEntry) {
-                debugLog('滚动到选中的日志条目');
                 selectedEntry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             }
         }
@@ -344,10 +410,7 @@
         if (loadMoreButton) {
             loadMoreButton.addEventListener('click', () => {
                 debugLog('点击加载更多按钮');
-                vscode.postMessage({
-                    command: 'loadMoreLogs',
-                    limit: 50
-                });
+                vscode.postMessage({ command: 'loadMoreLogs', limit: 100 });
             });
         }
     }
@@ -575,19 +638,39 @@
         logDetails.innerHTML = html;
         debugLog('详情内容渲染完成');
         
-        // 添加详细按钮点击事件
+        // 添加详细按钮点击事件 + 文件列表右键菜单
         document.querySelectorAll('.detail-button:not([disabled])').forEach(button => {
             button.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const path = button.getAttribute('data-path');
                 const revision = button.getAttribute('data-revision');
                 debugLog('点击显示差异按钮: 路径=' + path + ', 修订版本=' + revision);
+                vscode.postMessage({ command: 'viewFileDiff', path: path, revision: revision });
+            });
+        });
+        
+        // 文件列表右键菜单
+        document.querySelectorAll('.path-item').forEach(item => {
+            item.addEventListener('contextmenu', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const filepathEl = item.querySelector('.path-filepath');
+                const actionEl = item.querySelector('.path-action');
+                const filePath = filepathEl ? (filepathEl.getAttribute('title') || filepathEl.textContent.trim()) : '';
+                const action = actionEl ? actionEl.textContent.trim() : '';
+                const revision = details.revision;
+                const canDiff = (action === 'M' || action === 'A');
                 
-                vscode.postMessage({
-                    command: 'viewFileDiff',
-                    path: path,
-                    revision: revision
-                });
+                createContextMenu(e.clientX, e.clientY, [
+                    { icon: '📄', label: '显示差异', disabled: !canDiff, action: () => vscode.postMessage({ command: 'viewFileDiff', path: filePath, revision: revision }) },
+                    { icon: '🔄', label: '与工作副本比较', action: () => vscode.postMessage({ command: 'compareFileWithWorking', path: filePath, revision: revision }) },
+                    { icon: '👁️', label: '查看此版本文件', action: () => vscode.postMessage({ command: 'viewFileAtRevision', path: filePath, revision: revision }) },
+                    { icon: '👤', label: 'Blame（注释）', action: () => vscode.postMessage({ command: 'blameFileAtRevision', path: filePath, revision: revision }) },
+                    { icon: '📜', label: '查看文件日志', action: () => vscode.postMessage({ command: 'showFileLog', path: filePath }) },
+                    { separator: true },
+                    { icon: '📋', label: '复制文件路径', action: () => vscode.postMessage({ command: 'copyFilePath', path: filePath }) },
+                    { icon: '📁', label: '在文件管理器中打开', action: () => vscode.postMessage({ command: 'openInExplorer', path: filePath }) },
+                ]);
             });
         });
         

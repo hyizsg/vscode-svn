@@ -215,7 +215,7 @@ export class SvnLogPanel {
     /**
      * 加载SVN日志
      */
-    private async _loadLogs(limit: number = 50, isLoadingMore: boolean = false) {
+    private async _loadLogs(limit: number = 100, isLoadingMore: boolean = false) {
         try {
             // 确定版本范围
             let revisionRange = "HEAD:1";
@@ -324,7 +324,15 @@ export class SvnLogPanel {
             this._panel.webview.postMessage({ command: 'setLoading', value: false });
         } catch (error: any) {
             this._log(`获取SVN日志失败: ${error.message}`);
-            vscode.window.showErrorMessage(`获取SVN日志失败: ${error.message}`);
+            // 加载更多时如果文件在更早版本不存在（E195012），友好提示
+            if (isLoadingMore && error.message && error.message.includes('E195012')) {
+                this._log('文件在更早版本中不存在，已加载全部历史记录');
+                this._minLoadedRevision = '1'; // 标记为无更多日志
+                this._updateLogList(true);
+                vscode.window.showInformationMessage('已加载该文件/目录的全部历史记录');
+            } else {
+                vscode.window.showErrorMessage(`获取SVN日志失败: ${error.message}`);
+            }
             this._panel.webview.postMessage({ command: 'setLoading', value: false });
         }
     }
@@ -784,15 +792,15 @@ export class SvnLogPanel {
                         await this._showRevisionDetails(message.revision);
                         break;
                     case 'loadMoreLogs':
-                        this._log(`加载更多日志，限制: ${message.limit || 50}，最小已加载版本: ${this._minLoadedRevision || '无'}`);
+                        this._log(`加载更多日志，限制: ${message.limit || 100}，最小已加载版本: ${this._minLoadedRevision || '无'}`);
                         
                         // 检查当前是否处于筛选状态
                         if (this._currentFilterState.isFiltered) {
                             this._log('当前处于筛选状态，使用筛选逻辑加载更多日志');
-                            await this._loadMoreFilteredLogs(message.limit || 50);
+                            await this._loadMoreFilteredLogs(message.limit || 100);
                         } else {
                             this._log('当前未筛选，使用普通逻辑加载更多日志');
-                            await this._loadLogs(message.limit || 50, true); // 传入true表示加载更多模式
+                            await this._loadLogs(message.limit || 100, true); // 传入true表示加载更多模式
                         }
                         break;
                     case 'refresh':
@@ -831,6 +839,77 @@ export class SvnLogPanel {
                         break;
                     case 'debug':
                         this._log(`[Webview调试] ${message.message}`);
+                        break;
+                    // ========== 右键菜单新增命令 ==========
+                    case 'viewRevisionDiff':
+                        this._log(`右键: 显示版本差异 r${message.revision}`);
+                        await this._handleViewRevisionDiff(message.revision);
+                        break;
+                    case 'compareWithWorkingCopy':
+                        this._log(`右键: 与工作副本比较 r${message.revision}`);
+                        await this._handleCompareWithWorkingCopy(message.revision);
+                        break;
+                    case 'updateToRevision':
+                        this._log(`右键: 更新到版本 r${message.revision}`);
+                        await this._handleUpdateToRevision(message.revision);
+                        break;
+                    case 'revertToRevision':
+                        this._log(`右键: 回滚版本 r${message.revision}`);
+                        await this._handleRevertToRevision(message.revision);
+                        break;
+                    case 'createBranchFromRevision':
+                        this._log(`右键: 创建分支/标签从 r${message.revision}`);
+                        await this._handleCreateBranchFromRevision(message.revision);
+                        break;
+                    case 'exportRevisionDiff':
+                        this._log(`右键: 导出版本Diff r${message.revision}`);
+                        await this._handleExportRevisionDiff(message.revision);
+                        break;
+                    case 'copyRevisionNumber':
+                        await vscode.env.clipboard.writeText(message.revision);
+                        vscode.window.showInformationMessage(`已复制修订版本号: ${message.revision}`);
+                        break;
+                    case 'copyLogMessage':
+                        if (message.message) {
+                            await vscode.env.clipboard.writeText(message.message);
+                            vscode.window.showInformationMessage('已复制提交信息');
+                        } else {
+                            const entry = this._logEntries.find(e => e.revision === message.revision);
+                            if (entry) {
+                                await vscode.env.clipboard.writeText(entry.message);
+                                vscode.window.showInformationMessage('已复制提交信息');
+                            }
+                        }
+                        break;
+                    case 'browseRevisionRepo':
+                        this._log(`右键: 浏览仓库 r${message.revision}`);
+                        vscode.commands.executeCommand('vscode-svn.repoBrowser');
+                        break;
+                    case 'compareFileWithWorking':
+                        this._log(`右键: 文件与工作副本比较 ${message.path} r${message.revision}`);
+                        await this._handleCompareFileWithWorking(message.path, message.revision);
+                        break;
+                    case 'viewFileAtRevision':
+                        this._log(`右键: 查看文件版本 ${message.path} r${message.revision}`);
+                        await this._handleViewFileAtRevision(message.path, message.revision);
+                        break;
+                    case 'blameFileAtRevision':
+                        this._log(`右键: Blame文件 ${message.path} r${message.revision}`);
+                        await this._handleBlameFileAtRevision(message.path, message.revision);
+                        break;
+                    case 'showFileLog':
+                        this._log(`右键: 查看文件日志 ${message.path}`);
+                        await this._handleShowFileLog(message.path);
+                        break;
+                    case 'copyFilePath':
+                        if (message.path) {
+                            await vscode.env.clipboard.writeText(message.path);
+                            vscode.window.showInformationMessage(`已复制文件路径: ${message.path}`);
+                        }
+                        break;
+                    case 'openInExplorer':
+                        this._log(`右键: 在文件管理器中打开 ${message.path}`);
+                        await this._handleOpenInExplorer(message.path);
                         break;
                     case 'updateSvnRelativePath':
                         this._targetSvnRelativePath = message.targetSvnRelativePath;
@@ -1982,7 +2061,7 @@ export class SvnLogPanel {
                                 debugLog('点击加载更多按钮');
                                 vscode.postMessage({
                                     command: 'loadMoreLogs',
-                                    limit: 50
+                                    limit: 100
                                 });
                             });
                         }
@@ -2580,7 +2659,7 @@ export class SvnLogPanel {
     /**
      * 在筛选状态下加载更多日志
      */
-    private async _loadMoreFilteredLogs(limit: number = 50) {
+    private async _loadMoreFilteredLogs(limit: number = 100) {
         try {
             this._log('开始在筛选状态下加载更多日志');
             
@@ -2698,7 +2777,15 @@ export class SvnLogPanel {
             
         } catch (error: any) {
             this._log(`在筛选状态下加载更多日志失败: ${error.message}`);
-            vscode.window.showErrorMessage(`加载更多日志失败: ${error.message}`);
+            // 加载更多时如果文件在更早版本不存在（E195012），友好提示
+            if (error.message && error.message.includes('E195012')) {
+                this._log('文件在更早版本中不存在，已加载全部历史记录');
+                this._minLoadedRevision = '1';
+                this._updateLogList(true);
+                vscode.window.showInformationMessage('已加载该文件/目录的全部历史记录');
+            } else {
+                vscode.window.showErrorMessage(`加载更多日志失败: ${error.message}`);
+            }
             this._panel.webview.postMessage({ command: 'setLoading', value: false });
         }
     }
@@ -3473,6 +3560,321 @@ export class SvnLogPanel {
             </script>
         </body>
         </html>`;
+    }
+
+    // ============================================================
+    // 右键菜单 Handler 方法
+    // ============================================================
+
+    /**
+     * 获取当前目标路径的工作目录及仓库信息
+     */
+    private async _getRepoInfo(): Promise<{ workingDir: string; repoUrl: string; repoRoot: string }> {
+        const isDir = fs.existsSync(this._targetPath) && fs.lstatSync(this._targetPath).isDirectory();
+        const workingDir = isDir ? this._targetPath : path.dirname(this._targetPath);
+        let repoUrl = '';
+        let repoRoot = '';
+        try {
+            const infoXml = await this.svnService.executeSvnCommand(`info --xml "${this._targetPath}"`, workingDir, false);
+            const urlMatch = /<url>(.*?)<\/url>/s.exec(infoXml);
+            const rootMatch = /<root>(.*?)<\/root>/s.exec(infoXml);
+            if (urlMatch) { repoUrl = urlMatch[1]; }
+            if (rootMatch) { repoRoot = rootMatch[1]; }
+        } catch (e) { /* ignore */ }
+        return { workingDir, repoUrl, repoRoot };
+    }
+
+    /**
+     * 构建 SVN 文件 URL
+     */
+    private _buildFileUrl(filePath: string, repoUrl: string, repoRoot: string): string {
+        if (!repoRoot) { return ''; }
+        if (filePath.startsWith('/')) {
+            const repoUrlPath = repoUrl.replace(repoRoot, '');
+            if (repoUrlPath && filePath.startsWith(repoUrlPath)) {
+                return `${repoRoot}${filePath}`;
+            }
+            return `${repoRoot}${filePath}`;
+        }
+        return `${repoUrl}/${filePath}`;
+    }
+
+    /**
+     * 右键: 显示版本差异（整个版本的 diff -c REV，以 .diff 文件打开）
+     */
+    private async _handleViewRevisionDiff(revision: string) {
+        try {
+            const { workingDir } = await this._getRepoInfo();
+            const diffContent = await this.svnService.executeSvnCommand(
+                `diff -c ${revision} "${this._targetPath}"`, workingDir, false
+            );
+            const tempDir = path.join(os.tmpdir(), 'vscode-svn-diff');
+            if (!fs.existsSync(tempDir)) { fs.mkdirSync(tempDir, { recursive: true }); }
+            const diffFile = path.join(tempDir, `r${revision}.diff`);
+            fs.writeFileSync(diffFile, diffContent);
+            await vscode.workspace.openTextDocument(diffFile).then(doc => vscode.window.showTextDocument(doc));
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`显示版本差异失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 右键: 与工作副本比较（svn diff -r REV 当前工作副本 vs 指定版本）
+     */
+    private async _handleCompareWithWorkingCopy(revision: string) {
+        try {
+            const { workingDir, repoUrl, repoRoot } = await this._getRepoInfo();
+            // 对于目录或文件，直接用 -c REV 和 svn cat 来对比各文件
+            // 这里对整体变更做 diff，输出到临时文件
+            const diffContent = await this.svnService.executeSvnCommand(
+                `diff -r ${revision} "${this._targetPath}"`, workingDir, false
+            );
+            const tempDir = path.join(os.tmpdir(), 'vscode-svn-diff');
+            if (!fs.existsSync(tempDir)) { fs.mkdirSync(tempDir, { recursive: true }); }
+            const diffFile = path.join(tempDir, `r${revision}_vs_working.diff`);
+            fs.writeFileSync(diffFile, diffContent);
+            await vscode.workspace.openTextDocument(diffFile).then(doc => vscode.window.showTextDocument(doc));
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`与工作副本比较失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 右键: 更新到指定版本
+     */
+    private async _handleUpdateToRevision(revision: string) {
+        const confirm = await vscode.window.showWarningMessage(
+            `确定要将工作副本更新到版本 r${revision} 吗？`,
+            { modal: true },
+            '确定'
+        );
+        if (confirm !== '确定') { return; }
+        try {
+            await this.svnService.updateToRevision(this._targetPath, revision);
+            vscode.window.showInformationMessage(`已成功更新到版本 r${revision}`);
+            // 刷新日志面板
+            await this._loadLogs();
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`更新到版本 r${revision} 失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 右键: 回滚到指定版本（svn merge -c -REV）
+     */
+    private async _handleRevertToRevision(revision: string) {
+        const confirm = await vscode.window.showWarningMessage(
+            `确定要回滚版本 r${revision} 的变更吗？此操作会将该版本引入的变更撤销到工作副本。`,
+            { modal: true },
+            '确定回滚'
+        );
+        if (confirm !== '确定回滚') { return; }
+        try {
+            const workingDir = fs.lstatSync(this._targetPath).isDirectory()
+                ? this._targetPath
+                : path.dirname(this._targetPath);
+            await this.svnService.rollbackRevision(workingDir, revision);
+            vscode.window.showInformationMessage(`已成功回滚版本 r${revision} 的变更，请提交以保存回滚结果。`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`回滚版本 r${revision} 失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 右键: 从指定版本创建分支/标签
+     */
+    private async _handleCreateBranchFromRevision(revision: string) {
+        try {
+            await vscode.commands.executeCommand('vscode-svn.createBranchTag');
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`创建分支/标签失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 右键: 导出版本 Diff 文件
+     */
+    private async _handleExportRevisionDiff(revision: string) {
+        try {
+            const { workingDir } = await this._getRepoInfo();
+            const diffContent = await this.svnService.executeSvnCommand(
+                `diff -c ${revision} "${this._targetPath}"`, workingDir, false
+            );
+            const saveUri = await vscode.window.showSaveDialog({
+                defaultUri: vscode.Uri.file(path.join(os.homedir(), `r${revision}.diff`)),
+                filters: { 'Diff 文件': ['diff', 'patch'], '所有文件': ['*'] }
+            });
+            if (!saveUri) { return; }
+            fs.writeFileSync(saveUri.fsPath, diffContent);
+            vscode.window.showInformationMessage(`已导出 diff 到: ${saveUri.fsPath}`);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`导出版本 Diff 失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 右键(文件): 与工作副本中当前文件比较
+     */
+    private async _handleCompareFileWithWorking(svnFilePath: string, revision: string) {
+        try {
+            const { workingDir, repoUrl, repoRoot } = await this._getRepoInfo();
+            const fileUrl = this._buildFileUrl(svnFilePath, repoUrl, repoRoot);
+            if (!fileUrl) { throw new Error('无法构建文件 URL'); }
+
+            const fileName = path.basename(svnFilePath);
+            const tempDir = path.join(os.tmpdir(), 'vscode-svn-diff');
+            if (!fs.existsSync(tempDir)) { fs.mkdirSync(tempDir, { recursive: true }); }
+
+            // 获取指定版本的文件内容
+            const revContent = await this.svnService.executeSvnCommand(`cat "${fileUrl}@${revision}"`, workingDir, false);
+            const revFilePath = path.join(tempDir, `${fileName}.r${revision}`);
+            fs.writeFileSync(revFilePath, revContent);
+
+            // 确定本地文件路径
+            let localFilePath = '';
+            if (repoRoot && repoUrl) {
+                const repoRelative = repoUrl.replace(repoRoot, '');
+                // 尝试从目标路径推导本地路径
+                const isDir = fs.lstatSync(this._targetPath).isDirectory();
+                if (isDir) {
+                    // 从 svnFilePath 中去掉 repoRelative 前缀得到相对路径
+                    let relPath = svnFilePath;
+                    if (repoRelative && svnFilePath.startsWith(repoRelative)) {
+                        relPath = svnFilePath.substring(repoRelative.length);
+                    }
+                    localFilePath = path.join(this._targetPath, relPath);
+                } else {
+                    localFilePath = this._targetPath;
+                }
+            }
+
+            if (localFilePath && fs.existsSync(localFilePath)) {
+                await vscode.commands.executeCommand(
+                    'vscode.diff',
+                    vscode.Uri.file(revFilePath),
+                    vscode.Uri.file(localFilePath),
+                    `${fileName} (r${revision} vs 工作副本)`
+                );
+            } else {
+                await vscode.workspace.openTextDocument(revFilePath).then(doc => vscode.window.showTextDocument(doc));
+                vscode.window.showWarningMessage('无法找到本地文件，已打开历史版本。');
+            }
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`文件比较失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 右键(文件): 查看指定版本的文件内容
+     */
+    private async _handleViewFileAtRevision(svnFilePath: string, revision: string) {
+        try {
+            const { workingDir, repoUrl, repoRoot } = await this._getRepoInfo();
+            const fileUrl = this._buildFileUrl(svnFilePath, repoUrl, repoRoot) || svnFilePath;
+
+            const fileName = path.basename(svnFilePath);
+            const tempDir = path.join(os.tmpdir(), 'vscode-svn-diff');
+            if (!fs.existsSync(tempDir)) { fs.mkdirSync(tempDir, { recursive: true }); }
+
+            const content = await this.svnService.catFile(fileUrl, revision).catch(async () => {
+                return await this.svnService.executeSvnCommand(`cat "${fileUrl}@${revision}"`, workingDir, false);
+            });
+
+            const ext = path.extname(fileName);
+            const viewFilePath = path.join(tempDir, `${path.basename(fileName, ext)}.r${revision}${ext}`);
+            fs.writeFileSync(viewFilePath, content);
+            await vscode.workspace.openTextDocument(viewFilePath).then(doc => vscode.window.showTextDocument(doc));
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`查看文件版本失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 右键(文件): Blame 指定版本的文件
+     */
+    private async _handleBlameFileAtRevision(svnFilePath: string, revision: string) {
+        try {
+            const { workingDir, repoUrl, repoRoot } = await this._getRepoInfo();
+            const fileUrl = this._buildFileUrl(svnFilePath, repoUrl, repoRoot) || svnFilePath;
+
+            const blameOutput = await this.svnService.executeSvnCommand(
+                `blame -r 1:${revision} "${fileUrl}@${revision}"`, workingDir, false
+            );
+
+            const fileName = path.basename(svnFilePath);
+            const tempDir = path.join(os.tmpdir(), 'vscode-svn-diff');
+            if (!fs.existsSync(tempDir)) { fs.mkdirSync(tempDir, { recursive: true }); }
+            const blameFile = path.join(tempDir, `${fileName}.r${revision}.blame.txt`);
+            fs.writeFileSync(blameFile, blameOutput);
+            await vscode.workspace.openTextDocument(blameFile).then(doc => vscode.window.showTextDocument(doc));
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`Blame 失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 右键(文件): 显示该文件的 SVN 日志
+     */
+    private async _handleShowFileLog(svnFilePath: string) {
+        try {
+            const { workingDir, repoUrl, repoRoot } = await this._getRepoInfo();
+
+            // 尝试推导本地绝对路径
+            let localPath = '';
+            const isDir = fs.existsSync(this._targetPath) && fs.lstatSync(this._targetPath).isDirectory();
+            if (isDir && repoRoot && repoUrl) {
+                const repoRelative = repoUrl.replace(repoRoot, '');
+                let relPath = svnFilePath;
+                if (repoRelative && svnFilePath.startsWith(repoRelative)) {
+                    relPath = svnFilePath.substring(repoRelative.length);
+                }
+                localPath = path.join(this._targetPath, relPath);
+            } else {
+                localPath = this._targetPath;
+            }
+
+            if (!fs.existsSync(localPath)) {
+                // 本地不存在，用 URL 打开
+                const fileUrl = this._buildFileUrl(svnFilePath, repoUrl, repoRoot);
+                if (fileUrl) {
+                    localPath = fileUrl;
+                } else {
+                    vscode.window.showWarningMessage('无法找到本地文件，无法打开文件日志。');
+                    return;
+                }
+            }
+
+            await SvnLogPanel.createOrShow(this.extensionUri, localPath, this.svnService);
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`打开文件日志失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 右键(文件): 在文件管理器中显示文件
+     */
+    private async _handleOpenInExplorer(svnFilePath: string) {
+        try {
+            const isDir = fs.existsSync(this._targetPath) && fs.lstatSync(this._targetPath).isDirectory();
+            let localPath = this._targetPath;
+            if (isDir) {
+                const { repoUrl, repoRoot } = await this._getRepoInfo();
+                const repoRelative = repoUrl.replace(repoRoot, '');
+                let relPath = svnFilePath;
+                if (repoRelative && svnFilePath.startsWith(repoRelative)) {
+                    relPath = svnFilePath.substring(repoRelative.length);
+                }
+                localPath = path.join(this._targetPath, relPath);
+            }
+
+            if (fs.existsSync(localPath)) {
+                await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(localPath));
+            } else {
+                vscode.window.showWarningMessage(`本地文件不存在: ${localPath}`);
+            }
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`在文件管理器中打开失败: ${error.message}`);
+        }
     }
 
     /**

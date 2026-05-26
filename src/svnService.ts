@@ -2895,4 +2895,562 @@ export class SvnService {
       return new Set();
     }
   }
+
+  // ===================== Export / Import =====================
+
+  /**
+   * SVN Export：导出干净的工作副本（不含 .svn 元数据）
+   * @param sourcePath 工作副本路径或仓库 URL
+   * @param targetPath 导出目标目录
+   * @param revision 修订版本（可选，默认 HEAD）
+   * @param force 是否强制覆盖
+   */
+  public async exportPath(sourcePath: string, targetPath: string, revision?: string, force: boolean = false): Promise<void> {
+    this.showOutputChannel('SVN Export');
+    this.outputChannel.appendLine(`Export: ${sourcePath} -> ${targetPath}`);
+    try {
+      const revArg = revision ? ` -r ${revision}` : '';
+      const forceArg = force ? ' --force' : '';
+      const command = `export${revArg} "${sourcePath}" "${targetPath}"${forceArg}`;
+      const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+        || (fs.existsSync(sourcePath) ? path.dirname(sourcePath) : os.tmpdir());
+      const result = await this.executeSvnCommand(command, cwd);
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== SVN Export 完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      throw new Error(`Export 失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * SVN Import：将本地目录导入到仓库
+   * @param localPath 本地目录
+   * @param repoUrl 仓库目标 URL
+   * @param message 提交信息
+   */
+  public async importPath(localPath: string, repoUrl: string, message: string): Promise<void> {
+    this.showOutputChannel('SVN Import');
+    this.outputChannel.appendLine(`Import: ${localPath} -> ${repoUrl}`);
+    try {
+      const command = `import "${localPath}" "${repoUrl}" -m "${message.replace(/"/g, '\\"')}"`;
+      const result = await this.executeSvnCommand(command, path.dirname(localPath));
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== SVN Import 完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      throw new Error(`Import 失败: ${error.message}`);
+    }
+  }
+
+  // ===================== Patch =====================
+
+  /**
+   * 创建 Patch 文件（svn diff > patch）
+   * @param workingCopyPath 工作副本路径（文件或目录）
+   * @param patchFilePath 输出 patch 文件路径
+   */
+  public async createPatch(workingCopyPath: string, patchFilePath: string): Promise<void> {
+    this.showOutputChannel('SVN Create Patch');
+    this.outputChannel.appendLine(`Create Patch: ${workingCopyPath} -> ${patchFilePath}`);
+    try {
+      const stat = fs.statSync(workingCopyPath);
+      const cwd = stat.isDirectory() ? workingCopyPath : path.dirname(workingCopyPath);
+      const target = stat.isDirectory() ? '.' : path.basename(workingCopyPath);
+      const diffOutput = await this.executeSvnCommand(`diff "${target}"`, cwd);
+      if (!diffOutput || !diffOutput.trim()) {
+        throw new Error('没有检测到本地修改，无法创建 Patch');
+      }
+      fs.writeFileSync(patchFilePath, diffOutput, 'utf8');
+      this.outputChannel.appendLine(`已写入: ${patchFilePath}`);
+      this.outputChannel.appendLine('========== Patch 创建成功 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      throw error;
+    }
+  }
+
+  /**
+   * 应用 Patch 文件（svn patch）
+   * @param workingCopyPath 工作副本目录
+   * @param patchFilePath patch 文件路径
+   */
+  public async applyPatch(workingCopyPath: string, patchFilePath: string): Promise<void> {
+    this.showOutputChannel('SVN Apply Patch');
+    this.outputChannel.appendLine(`Apply Patch: ${patchFilePath} -> ${workingCopyPath}`);
+    try {
+      const stat = fs.statSync(workingCopyPath);
+      const cwd = stat.isDirectory() ? workingCopyPath : path.dirname(workingCopyPath);
+      const command = `patch "${patchFilePath}"`;
+      const result = await this.executeSvnCommand(command, cwd);
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== Patch 应用完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      throw new Error(`应用 Patch 失败: ${error.message}`);
+    }
+  }
+
+  // ===================== Properties =====================
+
+  /**
+   * 列出所有属性
+   */
+  public async propList(fsPath: string): Promise<Array<{ name: string; value: string }>> {
+    try {
+      const stat = fs.statSync(fsPath);
+      const cwd = stat.isDirectory() ? fsPath : path.dirname(fsPath);
+      const target = stat.isDirectory() ? '.' : path.basename(fsPath);
+      const result = await this.executeSvnCommand(`proplist -v "${target}"`, cwd);
+      const props: Array<{ name: string; value: string }> = [];
+      const lines = result.split('\n');
+      let currentName = '';
+      let currentValue: string[] = [];
+      const flush = () => {
+        if (currentName) {
+          props.push({ name: currentName, value: currentValue.join('\n').trim() });
+        }
+      };
+      for (const line of lines) {
+        // 顶层属性行: "Properties on '...':" 跳过
+        if (/^Properties on /.test(line)) continue;
+        // 属性名: 行首两空格 + 名称
+        const nameMatch = line.match(/^ {2}([^\s][^\n]*)$/);
+        if (nameMatch) {
+          flush();
+          currentName = nameMatch[1].trim();
+          currentValue = [];
+          continue;
+        }
+        // 属性值: 行首四空格
+        if (/^ {4}/.test(line)) {
+          currentValue.push(line.replace(/^ {4}/, ''));
+        }
+      }
+      flush();
+      return props;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[propList] 失败: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * 获取单个属性值
+   */
+  public async propGet(fsPath: string, propName: string): Promise<string> {
+    const stat = fs.statSync(fsPath);
+    const cwd = stat.isDirectory() ? fsPath : path.dirname(fsPath);
+    const target = stat.isDirectory() ? '.' : path.basename(fsPath);
+    const result = await this.executeSvnCommand(`propget "${propName}" "${target}"`, cwd);
+    return result.replace(/\r?\n$/, '');
+  }
+
+  /**
+   * 设置属性值（通过临时文件，支持多行）
+   */
+  public async propSet(fsPath: string, propName: string, value: string): Promise<void> {
+    const stat = fs.statSync(fsPath);
+    const cwd = stat.isDirectory() ? fsPath : path.dirname(fsPath);
+    const target = stat.isDirectory() ? '.' : path.basename(fsPath);
+    const tmpFile = path.join(os.tmpdir(), `svn-propset-${Date.now()}.txt`);
+    fs.writeFileSync(tmpFile, value, 'utf8');
+    try {
+      await this.executeSvnCommand(`propset "${propName}" -F "${tmpFile}" "${target}"`, cwd);
+    } finally {
+      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * 删除属性
+   */
+  public async propDel(fsPath: string, propName: string): Promise<void> {
+    const stat = fs.statSync(fsPath);
+    const cwd = stat.isDirectory() ? fsPath : path.dirname(fsPath);
+    const target = stat.isDirectory() ? '.' : path.basename(fsPath);
+    await this.executeSvnCommand(`propdel "${propName}" "${target}"`, cwd);
+  }
+
+  // ===================== Ignore =====================
+
+  /**
+   * 向父目录的 svn:ignore 添加忽略模式
+   */
+  public async addIgnore(parentDir: string, pattern: string): Promise<void> {
+    this.showOutputChannel('SVN 添加忽略');
+    let current = '';
+    try {
+      current = await this.propGet(parentDir, 'svn:ignore');
+    } catch {
+      // 还未设置 svn:ignore
+    }
+    const set = new Set(current.split('\n').map(l => l.trim()).filter(l => l));
+    set.add(pattern.trim());
+    const newValue = Array.from(set).join('\n');
+    await this.propSet(parentDir, 'svn:ignore', newValue);
+    this.outputChannel.appendLine(`已将 "${pattern}" 添加到 ${parentDir} 的 svn:ignore`);
+  }
+
+  /**
+   * 从父目录的 svn:ignore 移除忽略模式
+   */
+  public async removeIgnore(parentDir: string, pattern: string): Promise<void> {
+    this.showOutputChannel('SVN 移除忽略');
+    let current = '';
+    try {
+      current = await this.propGet(parentDir, 'svn:ignore');
+    } catch {
+      return;
+    }
+    const lines = current.split('\n').map(l => l.trim()).filter(l => l && l !== pattern.trim());
+    if (lines.length === 0) {
+      await this.propDel(parentDir, 'svn:ignore');
+    } else {
+      await this.propSet(parentDir, 'svn:ignore', lines.join('\n'));
+    }
+    this.outputChannel.appendLine(`已从 ${parentDir} 的 svn:ignore 移除 "${pattern}"`);
+  }
+
+  // ===================== Copy / Move =====================
+
+  /**
+   * SVN Copy（版本化复制，本地或远程）
+   * @param srcPath 源（本地路径或 URL）
+   * @param dstPath 目标（本地路径或 URL）
+   * @param message 远程操作时的提交信息（可选）
+   */
+  public async copyPath(srcPath: string, dstPath: string, message?: string): Promise<void> {
+    this.showOutputChannel('SVN Copy');
+    this.outputChannel.appendLine(`Copy: ${srcPath} -> ${dstPath}`);
+    try {
+      const msgArg = message ? ` -m "${message.replace(/"/g, '\\"')}"` : '';
+      const command = `copy "${srcPath}" "${dstPath}"${msgArg}`;
+      const cwd = (!/^[a-z]+:\/\//i.test(srcPath) && fs.existsSync(srcPath))
+        ? path.dirname(srcPath)
+        : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.tmpdir());
+      const result = await this.executeSvnCommand(command, cwd);
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== SVN Copy 完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      throw new Error(`SVN Copy 失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * SVN Move / Rename（版本化移动）
+   */
+  public async movePath(srcPath: string, dstPath: string, message?: string): Promise<void> {
+    this.showOutputChannel('SVN Move');
+    this.outputChannel.appendLine(`Move: ${srcPath} -> ${dstPath}`);
+    try {
+      const msgArg = message ? ` -m "${message.replace(/"/g, '\\"')}"` : '';
+      const command = `move "${srcPath}" "${dstPath}"${msgArg}`;
+      const cwd = (!/^[a-z]+:\/\//i.test(srcPath) && fs.existsSync(srcPath))
+        ? path.dirname(srcPath)
+        : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.tmpdir());
+      const result = await this.executeSvnCommand(command, cwd);
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== SVN Move 完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      throw new Error(`SVN Move 失败: ${error.message}`);
+    }
+  }
+
+  // ===================== Relocate =====================
+
+  /**
+   * 重定位工作副本到新 URL
+   */
+  public async relocate(workingCopyPath: string, newUrl: string): Promise<void> {
+    this.showOutputChannel('SVN Relocate');
+    this.outputChannel.appendLine(`Relocate: ${workingCopyPath} -> ${newUrl}`);
+    try {
+      const command = `relocate "${newUrl}"`;
+      const result = await this.executeSvnCommand(command, workingCopyPath);
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== SVN Relocate 完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      throw new Error(`Relocate 失败: ${error.message}`);
+    }
+  }
+
+  // ===================== Branch / Tag =====================
+
+  /**
+   * 获取仓库 root URL（svn info）
+   */
+  public async getRepoRoot(workingCopyPath: string): Promise<string> {
+    const stat = fs.statSync(workingCopyPath);
+    const cwd = stat.isDirectory() ? workingCopyPath : path.dirname(workingCopyPath);
+    const result = await this.executeSvnCommand('info --xml', cwd);
+    const match = result.match(/<root>([^<]+)<\/root>/);
+    if (!match) throw new Error('无法获取仓库 Root URL');
+    return match[1];
+  }
+
+  /**
+   * 获取当前工作副本对应的 URL
+   */
+  public async getCurrentUrl(workingCopyPath: string): Promise<string> {
+    const stat = fs.statSync(workingCopyPath);
+    const cwd = stat.isDirectory() ? workingCopyPath : path.dirname(workingCopyPath);
+    const result = await this.executeSvnCommand('info --xml', cwd);
+    const match = result.match(/<url>([^<]+)<\/url>/);
+    if (!match) throw new Error('无法获取当前 URL');
+    return match[1];
+  }
+
+  /**
+   * 创建分支或 Tag（svn copy <srcUrl> <dstUrl> -m <message>）
+   */
+  public async createBranchOrTag(workingCopyPath: string, srcUrl: string, dstUrl: string, message: string): Promise<void> {
+    this.showOutputChannel('SVN 创建分支/Tag');
+    this.outputChannel.appendLine(`Source: ${srcUrl}`);
+    this.outputChannel.appendLine(`Target: ${dstUrl}`);
+    try {
+      const command = `copy "${srcUrl}" "${dstUrl}" -m "${message.replace(/"/g, '\\"')}"`;
+      const result = await this.executeSvnCommand(command, workingCopyPath);
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== 分支/Tag 创建完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      throw new Error(`创建分支/Tag 失败: ${error.message}`);
+    }
+  }
+
+  // ===================== Repository Browser =====================
+
+  /**
+   * 列出仓库目录（svn list <URL>）
+   * @returns 条目列表（dir 以 / 结尾）
+   */
+  public async listRepo(url: string): Promise<string[]> {
+    const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.tmpdir();
+    const result = await this.executeSvnCommand(`list "${url}"`, cwd);
+    return result.split('\n').map(l => l.replace(/\r$/, '')).filter(l => l.trim().length > 0);
+  }
+
+  // ===================== Update to Revision =====================
+
+  /**
+   * 更新到指定版本
+   * @param fsPath 文件或目录路径
+   * @param revision 版本号（数字或 HEAD）
+   */
+  public async updateToRevision(fsPath: string, revision: string): Promise<void> {
+    this.showOutputChannel('SVN Update to Revision');
+    this.outputChannel.appendLine(`路径: ${fsPath}, 版本: ${revision}`);
+    try {
+      const stat = fs.statSync(fsPath);
+      const isDir = stat.isDirectory();
+      const cwd = isDir ? fsPath : path.dirname(fsPath);
+      const target = isDir ? '.' : `"${path.basename(fsPath)}"`;
+      const result = await this.executeSvnCommand(`update ${target} -r ${revision}`, cwd);
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== Update to Revision 完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      throw new Error(`Update to Revision 失败: ${error.message}`);
+    }
+  }
+
+  // ===================== Check for Modifications =====================
+
+  /**
+   * 获取工作副本中所有修改文件的状态列表
+   * @param folderPath 工作副本目录
+   * @returns 状态条目数组
+   */
+  public async getStatusList(folderPath: string): Promise<Array<{filePath: string; status: string; char: string}>> {
+    try {
+      const result = await this.executeSvnCommand('status', folderPath);
+      const entries: Array<{filePath: string; status: string; char: string}> = [];
+      const statusMap: Record<string, string> = {
+        'M': '已修改', 'A': '已添加', 'D': '已删除', 'C': '冲突',
+        '?': '未版本控制', '!': '丢失', 'R': '已替换', 'I': '已忽略', '~': '类型变更'
+      };
+      for (const line of result.split('\n')) {
+        if (!line.trim() || line.startsWith('---')) continue;
+        const char = line[0];
+        if (char === ' ') continue;
+        const filePath = line.substring(8).trim();
+        if (!filePath) continue;
+        entries.push({
+          filePath: path.resolve(folderPath, filePath),
+          status: statusMap[char] || `状态(${char})`,
+          char
+        });
+      }
+      return entries;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getStatusList] 失败: ${error.message}`);
+      return [];
+    }
+  }
+
+  // ===================== Diff with Revision =====================
+
+  /**
+   * 与指定版本做 diff
+   * @param filePath 文件或目录路径
+   * @param rev1 版本1
+   * @param rev2 版本2（可选，不传则与工作副本比较）
+   */
+  public async diffWithRevision(filePath: string, rev1: string, rev2?: string): Promise<string> {
+    try {
+      const stat = fs.statSync(filePath);
+      const cwd = stat.isDirectory() ? filePath : path.dirname(filePath);
+      const target = stat.isDirectory() ? '.' : `"${path.basename(filePath)}"`;
+      const revArg = rev2 ? `-r ${rev1}:${rev2}` : `-r ${rev1}`;
+      const result = await this.executeSvnCommand(`diff ${revArg} ${target}`, cwd);
+      return result;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[diffWithRevision] 失败: ${error.message}`);
+      throw new Error(`Diff with Revision 失败: ${error.message}`);
+    }
+  }
+
+  // ===================== Rollback (Reverse Merge) =====================
+
+  /**
+   * 回滚指定版本（反向合并）
+   * @param workingDir 工作副本目录
+   * @param revision 要回滚的版本号
+   */
+  public async rollbackRevision(workingDir: string, revision: string): Promise<string> {
+    this.showOutputChannel('SVN Rollback');
+    this.outputChannel.appendLine(`工作目录: ${workingDir}, 回滚版本: r${revision}`);
+    try {
+      const result = await this.executeSvnCommand(`merge -c -${revision} .`, workingDir);
+      this.outputChannel.appendLine(result);
+      this.outputChannel.appendLine('========== Rollback 完成（反向合并已应用，请检查并提交） ==========');
+      return result;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      throw new Error(`Rollback 失败: ${error.message}`);
+    }
+  }
+
+  // ===================== SVN Cat =====================
+
+  /**
+   * 查看文件指定版本的内容
+   * @param filePath 文件路径
+   * @param revision 版本号
+   */
+  public async catFile(filePath: string, revision: string): Promise<string> {
+    try {
+      const cwd = path.dirname(filePath);
+      const fileName = path.basename(filePath);
+      const escaped = fileName.includes('@') ? `${fileName}@` : fileName;
+      const result = await this.executeSvnCommand(`cat -r ${revision} "${escaped}"`, cwd);
+      return result;
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[catFile] 失败: ${error.message}`);
+      throw new Error(`查看版本文件失败: ${error.message}`);
+    }
+  }
+
+  // ===================== Get File / Dir URL =====================
+
+  /**
+   * 获取文件/目录的 SVN URL
+   * @param fsPath 文件系统路径
+   */
+  public async getFileUrl(fsPath: string): Promise<string> {
+    try {
+      const stat = fs.statSync(fsPath);
+      const cwd = stat.isDirectory() ? fsPath : path.dirname(fsPath);
+      const target = stat.isDirectory() ? '.' : `"${path.basename(fsPath)}"`;
+      const result = await this.executeSvnCommand(`info --xml ${target}`, cwd, true);
+      const match = result.match(/<url>([^<]+)<\/url>/);
+      if (!match) throw new Error('无法获取 URL');
+      return match[1].trim();
+    } catch (error: any) {
+      throw new Error(`获取 URL 失败: ${error.message}`);
+    }
+  }
+
+  // ===================== Externals =====================
+
+  /**
+   * 获取目录的 svn:externals 属性
+   */
+  public async getExternals(dirPath: string): Promise<string> {
+    try {
+      const result = await this.executeSvnCommand(`propget svn:externals .`, dirPath);
+      return result.trim();
+    } catch {
+      return '';
+    }
+  }
+
+  /**
+   * 设置目录的 svn:externals 属性
+   */
+  public async setExternals(dirPath: string, value: string): Promise<void> {
+    const tmpFile = path.join(os.tmpdir(), `svn-ext-${Date.now()}.txt`);
+    try {
+      fs.writeFileSync(tmpFile, value, 'utf8');
+      await this.executeSvnCommand(`propset svn:externals -F "${tmpFile}" .`, dirPath);
+    } finally {
+      try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+    }
+  }
+
+  // ===================== Sparse Checkout =====================
+
+  /**
+   * 稀疏检出（按深度）
+   * @param svnUrl 仓库 URL
+   * @param targetDirectory 目标目录
+   * @param depth 检出深度: empty | files | immediates | infinity
+   */
+  public async sparseCheckout(
+    svnUrl: string,
+    targetDirectory: string,
+    depth: string,
+    username?: string,
+    password?: string
+  ): Promise<{ success: boolean; message: string }> {
+    this.showOutputChannel('SVN Sparse Checkout');
+    this.outputChannel.appendLine(`URL: ${svnUrl}`);
+    this.outputChannel.appendLine(`目标目录: ${targetDirectory}`);
+    this.outputChannel.appendLine(`深度: ${depth}`);
+    try {
+      if (!await fsExists(targetDirectory)) {
+        await fs.promises.mkdir(targetDirectory, { recursive: true });
+      }
+      const env = this.getEnhancedEnvironment();
+      const args = ['checkout', `--depth=${depth}`, svnUrl, targetDirectory];
+      if (username && password) {
+        args.push('--username', username, '--password', password);
+      }
+      args.push('--non-interactive', '--trust-server-cert');
+      return await new Promise<{ success: boolean; message: string }>((resolve) => {
+        const proc = cp.spawn('svn', args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
+        let stdout = '';
+        let stderr = '';
+        proc.stdout?.on('data', (d) => { stdout += d.toString(); });
+        proc.stderr?.on('data', (d) => { stderr += d.toString(); });
+        proc.on('close', (code) => {
+          if (code === 0) {
+            this.outputChannel.appendLine(stdout);
+            this.outputChannel.appendLine('========== Sparse Checkout 完成 ==========');
+            resolve({ success: true, message: stdout || 'Sparse Checkout 完成' });
+          } else {
+            this.outputChannel.appendLine(`错误: ${stderr}`);
+            resolve({ success: false, message: stderr || 'Sparse Checkout 失败' });
+          }
+        });
+        proc.on('error', (e) => resolve({ success: false, message: e.message }));
+      });
+    } catch (error: any) {
+      return { success: false, message: error.message };
+    }
+  }
 }

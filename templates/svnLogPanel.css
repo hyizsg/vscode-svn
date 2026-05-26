@@ -118,13 +118,69 @@ body {
 }
 
 .log-entry {
-    padding: 10px;
-    padding-left: 15px; /* 增加左侧padding */
-    margin-bottom: 10px;
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 4px;
+    padding: 6px 10px;
+    padding-left: 12px;
+    margin-bottom: 2px;
+    border: 1px solid transparent;
+    border-bottom: 1px solid var(--vscode-panel-border);
+    border-radius: 0;
     cursor: pointer;
-    position: relative; /* 添加相对定位，用于放置新标记 */
+    position: relative;
+    display: grid;
+    grid-template-columns: 70px 1fr;
+    grid-template-rows: auto auto;
+    grid-column-gap: 8px;
+    grid-row-gap: 2px;
+}
+
+.log-entry .log-revision-cell {
+    grid-column: 1;
+    grid-row: 1 / span 2;
+    font-weight: bold;
+    align-self: start;
+    color: var(--vscode-textLink-foreground, #4ec9b0);
+    font-size: 0.95em;
+}
+
+.log-entry .log-meta-row {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.85em;
+    color: var(--vscode-descriptionForeground);
+}
+
+.log-entry .log-message-row {
+    grid-column: 2;
+    grid-row: 2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.9em;
+}
+
+.log-list-columns {
+    display: grid;
+    grid-template-columns: 70px 1fr;
+    grid-column-gap: 8px;
+    padding: 6px 10px 6px 12px;
+    border-bottom: 2px solid var(--vscode-panel-border);
+    font-weight: bold;
+    font-size: 0.85em;
+    color: var(--vscode-descriptionForeground);
+    position: sticky;
+    top: 0;
+    background-color: var(--vscode-editor-background);
+    z-index: 5;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.log-list-columns .col-meta {
+    display: flex;
+    justify-content: space-between;
 }
 
 .log-entry:hover {
@@ -136,8 +192,59 @@ body {
     color: var(--vscode-list-activeSelectionForeground);
 }
 
+.log-entry.selected .log-revision-cell,
+.log-entry.selected .log-meta-row {
+    color: var(--vscode-list-activeSelectionForeground);
+}
+
 .log-entry.newer-than-local {
-    border-left: 4px solid #ff9800; /* 保留左侧橙色边框标记 */
+    border-left: 3px solid #ff9800;
+}
+
+/* 自定义右键菜单 */
+.context-menu {
+    position: fixed;
+    z-index: 9999;
+    background-color: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+    color: var(--vscode-menu-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border));
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    padding: 4px 0;
+    min-width: 200px;
+    font-size: 0.9em;
+    user-select: none;
+}
+
+.context-menu-item {
+    padding: 6px 16px;
+    cursor: pointer;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.context-menu-item:hover:not(.disabled) {
+    background-color: var(--vscode-menu-selectionBackground, var(--vscode-list-activeSelectionBackground));
+    color: var(--vscode-menu-selectionForeground, var(--vscode-list-activeSelectionForeground));
+}
+
+.context-menu-item.disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.context-menu-icon {
+    width: 16px;
+    text-align: center;
+    font-size: 0.9em;
+}
+
+.context-menu-separator {
+    height: 1px;
+    background-color: var(--vscode-menu-separatorBackground, var(--vscode-panel-border));
+    margin: 4px 0;
 }
 
 .local-revision-info {
@@ -155,30 +262,7 @@ body {
     font-weight: bold;
 }
 
-.log-header {
-    display: flex;
-    justify-content: space-between;
-    margin-bottom: 5px;
-}
-
-.log-revision {
-    font-weight: bold;
-}
-
-.log-author {
-    font-style: italic;
-}
-
-.log-date {
-    color: var(--vscode-descriptionForeground);
-    font-size: 0.9em;
-}
-
-.log-message {
-    white-space: pre-wrap;
-    word-break: break-word;
-    margin-top: 5px;
-}
+/* 旧版卡片式布局样式已废弃，改用 grid 布局在 .log-entry 中实现 */
 
 .path-list-header {
     display: flex;

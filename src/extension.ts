@@ -826,6 +826,541 @@ async function checkoutFromSvn(folderUri?: vscode.Uri): Promise<void> {
   }
 }
 
+// ===================== 新增功能处理函数：Export / Import / Patch / Properties / Ignore / Copy / Move / Relocate / Branch&Tag / Repo Browser =====================
+
+/**
+ * SVN Export：导出干净副本（不含 .svn）
+ */
+async function svnExport(srcUri?: vscode.Uri): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) {
+      vscode.window.showErrorMessage('未检测到SVN命令行工具');
+      return;
+    }
+    let sourcePath: string | undefined = srcUri?.fsPath;
+    if (!sourcePath) {
+      const fromUrl = await vscode.window.showQuickPick(
+        [
+          { label: '从本地工作副本导出', value: 'local' },
+          { label: '从远程 URL 导出', value: 'url' }
+        ],
+        { placeHolder: '选择导出源' }
+      );
+      if (!fromUrl) return;
+      if (fromUrl.value === 'url') {
+        const url = await vscode.window.showInputBox({ prompt: '输入仓库 URL', placeHolder: 'http://svn.example.com/svn/repo/trunk' });
+        if (!url) return;
+        sourcePath = url.trim();
+      } else {
+        if (!vscode.workspace.workspaceFolders?.length) {
+          vscode.window.showErrorMessage('没有打开的工作区');
+          return;
+        }
+        sourcePath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+      }
+    }
+    const targets = await vscode.window.showOpenDialog({
+      canSelectFiles: false,
+      canSelectFolders: true,
+      canSelectMany: false,
+      openLabel: '选择导出目录'
+    });
+    if (!targets || targets.length === 0) return;
+    const targetDir = targets[0].fsPath;
+    const baseName = /^[a-z]+:\/\//i.test(sourcePath) ? path.basename(sourcePath) : path.basename(sourcePath);
+    const exportTo = path.join(targetDir, baseName);
+
+    const revision = await vscode.window.showInputBox({
+      prompt: '输入修订版本（可选，默认 HEAD）',
+      placeHolder: '例如 1234 或留空使用 HEAD'
+    });
+    if (revision === undefined) return;
+
+    const force = fs.existsSync(exportTo);
+    if (force) {
+      const ok = await vscode.window.showWarningMessage(`目标 ${exportTo} 已存在，是否强制覆盖？`, { modal: true }, '强制覆盖');
+      if (ok !== '强制覆盖') return;
+    }
+
+    await svnService.exportPath(sourcePath, exportTo, revision.trim() || undefined, force);
+    vscode.window.showInformationMessage(`SVN Export 完成: ${exportTo}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`SVN Export 失败: ${error.message}`);
+  }
+}
+
+/**
+ * SVN Import：导入本地目录到仓库
+ */
+async function svnImport(folderUri?: vscode.Uri): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) {
+      vscode.window.showErrorMessage('未检测到SVN命令行工具');
+      return;
+    }
+    let localPath = folderUri?.fsPath;
+    if (!localPath) {
+      const picks = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: '选择要导入的本地目录'
+      });
+      if (!picks || picks.length === 0) return;
+      localPath = picks[0].fsPath;
+    }
+    const repoUrl = await vscode.window.showInputBox({
+      prompt: '输入目标仓库 URL',
+      placeHolder: 'http://svn.example.com/svn/repo/path/to/import'
+    });
+    if (!repoUrl) return;
+    const message = await vscode.window.showInputBox({
+      prompt: '输入提交信息',
+      placeHolder: 'Initial import',
+      validateInput: v => v.trim().length === 0 ? '提交信息不能为空' : null
+    });
+    if (!message) return;
+    await svnService.importPath(localPath, repoUrl.trim(), message);
+    vscode.window.showInformationMessage(`SVN Import 完成: ${repoUrl}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`SVN Import 失败: ${error.message}`);
+  }
+}
+
+/**
+ * 创建 Patch
+ */
+async function svnCreatePatch(targetUri?: vscode.Uri): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) {
+      vscode.window.showErrorMessage('未检测到SVN命令行工具');
+      return;
+    }
+    let workPath = targetUri?.fsPath;
+    if (!workPath) {
+      if (vscode.window.activeTextEditor) {
+        workPath = vscode.window.activeTextEditor.document.uri.fsPath;
+      } else if (vscode.workspace.workspaceFolders?.length) {
+        workPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+      }
+    }
+    if (!workPath) {
+      vscode.window.showErrorMessage('请选择文件或目录');
+      return;
+    }
+    if (!await svnService.isInWorkingCopy(workPath)) {
+      vscode.window.showErrorMessage('不在SVN工作副本中');
+      return;
+    }
+    const defaultName = `${path.basename(workPath)}-${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.patch`;
+    const saveUri = await vscode.window.showSaveDialog({
+      defaultUri: vscode.Uri.file(path.join(os.homedir(), defaultName)),
+      filters: { 'Patch Files': ['patch', 'diff'], 'All Files': ['*'] },
+      saveLabel: '保存 Patch 文件'
+    });
+    if (!saveUri) return;
+    await svnService.createPatch(workPath, saveUri.fsPath);
+    const open = await vscode.window.showInformationMessage(`Patch 已创建: ${saveUri.fsPath}`, '打开文件');
+    if (open === '打开文件') {
+      const doc = await vscode.workspace.openTextDocument(saveUri);
+      await vscode.window.showTextDocument(doc);
+    }
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`创建 Patch 失败: ${error.message}`);
+  }
+}
+
+/**
+ * 应用 Patch
+ */
+async function svnApplyPatch(folderUri?: vscode.Uri): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) {
+      vscode.window.showErrorMessage('未检测到SVN命令行工具');
+      return;
+    }
+    let workPath = folderUri?.fsPath;
+    if (!workPath && vscode.workspace.workspaceFolders?.length) {
+      workPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    }
+    if (!workPath) {
+      vscode.window.showErrorMessage('请选择目录');
+      return;
+    }
+    const picks = await vscode.window.showOpenDialog({
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      openLabel: '选择 Patch 文件',
+      filters: { 'Patch Files': ['patch', 'diff'], 'All Files': ['*'] }
+    });
+    if (!picks || picks.length === 0) return;
+    await svnService.applyPatch(workPath, picks[0].fsPath);
+    vscode.window.showInformationMessage(`Patch 应用完成`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`应用 Patch 失败: ${error.message}`);
+  }
+}
+
+/**
+ * 属性管理
+ */
+async function svnManageProperties(targetUri?: vscode.Uri): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) {
+      vscode.window.showErrorMessage('未检测到SVN命令行工具');
+      return;
+    }
+    let target = targetUri?.fsPath;
+    if (!target) {
+      if (vscode.window.activeTextEditor) target = vscode.window.activeTextEditor.document.uri.fsPath;
+      else if (vscode.workspace.workspaceFolders?.length) target = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    }
+    if (!target) { vscode.window.showErrorMessage('请选择文件或目录'); return; }
+    if (!await svnService.isInWorkingCopy(target)) { vscode.window.showErrorMessage('不在SVN工作副本中'); return; }
+
+    while (true) {
+      const props = await svnService.propList(target);
+      type PropItem = vscode.QuickPickItem & { action?: string; propName?: string };
+      const items: PropItem[] = [
+        { label: '$(add) 添加属性…', description: '设置新属性名与值', action: 'add' },
+        { label: '', kind: vscode.QuickPickItemKind.Separator } as any,
+        ...props.map<PropItem>(p => ({
+          label: `$(symbol-property) ${p.name}`,
+          description: p.value.length > 80 ? p.value.slice(0, 80) + '…' : p.value,
+          propName: p.name,
+          action: 'edit'
+        }))
+      ];
+      if (props.length === 0) {
+        items.push({ label: '(当前没有属性)', description: target } as any);
+      }
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: `${path.basename(target)} 的属性（选择属性查看/编辑）`,
+        matchOnDescription: true
+      });
+      if (!picked) return;
+      if (picked.action === 'add') {
+        const name = await vscode.window.showInputBox({ prompt: '属性名（例如 svn:ignore、svn:eol-style）' });
+        if (!name) continue;
+        const value = await vscode.window.showInputBox({ prompt: `${name} 的值`, placeHolder: '多行请使用 \\n' });
+        if (value === undefined) continue;
+        await svnService.propSet(target, name.trim(), value.replace(/\\n/g, '\n'));
+        vscode.window.showInformationMessage(`已设置属性 ${name}`);
+      } else if (picked.action === 'edit' && picked.propName) {
+        const op = await vscode.window.showQuickPick(
+          [
+            { label: '$(edit) 修改值', value: 'edit' },
+            { label: '$(eye) 查看完整值', value: 'view' },
+            { label: '$(trash) 删除属性', value: 'delete' }
+          ],
+          { placeHolder: `${picked.propName} 操作` }
+        );
+        if (!op) continue;
+        if (op.value === 'view') {
+          const v = await svnService.propGet(target, picked.propName);
+          const doc = await vscode.workspace.openTextDocument({ content: v, language: 'plaintext' });
+          await vscode.window.showTextDocument(doc);
+        } else if (op.value === 'edit') {
+          const current = await svnService.propGet(target, picked.propName);
+          const newVal = await vscode.window.showInputBox({
+            prompt: `修改 ${picked.propName}`,
+            value: current.replace(/\n/g, '\\n'),
+            placeHolder: '多行请使用 \\n'
+          });
+          if (newVal === undefined) continue;
+          await svnService.propSet(target, picked.propName, newVal.replace(/\\n/g, '\n'));
+          vscode.window.showInformationMessage(`属性 ${picked.propName} 已更新`);
+        } else if (op.value === 'delete') {
+          const ok = await vscode.window.showWarningMessage(`确认删除属性 ${picked.propName}？`, { modal: true }, '确认删除');
+          if (ok !== '确认删除') continue;
+          await svnService.propDel(target, picked.propName);
+          vscode.window.showInformationMessage(`属性 ${picked.propName} 已删除`);
+        }
+      }
+    }
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`属性管理失败: ${error.message}`);
+  }
+}
+
+/**
+ * 添加到 svn:ignore
+ */
+async function svnAddIgnore(itemUri?: vscode.Uri): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) {
+      vscode.window.showErrorMessage('未检测到SVN命令行工具');
+      return;
+    }
+    let target = itemUri?.fsPath;
+    if (!target && vscode.window.activeTextEditor) target = vscode.window.activeTextEditor.document.uri.fsPath;
+    if (!target) { vscode.window.showErrorMessage('请选择文件或目录'); return; }
+    const stat = fs.statSync(target);
+    const parentDir = stat.isDirectory() ? path.dirname(target) : path.dirname(target);
+    const baseName = path.basename(target);
+    if (!await svnService.isInWorkingCopy(parentDir)) { vscode.window.showErrorMessage('父目录不在SVN工作副本中'); return; }
+    const pattern = await vscode.window.showInputBox({
+      prompt: `添加到 ${parentDir} 的 svn:ignore`,
+      value: baseName,
+      placeHolder: '可使用 glob，例如 *.log'
+    });
+    if (!pattern) return;
+    await svnService.addIgnore(parentDir, pattern.trim());
+    vscode.window.showInformationMessage(`已添加到 svn:ignore: ${pattern}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`添加到 svn:ignore 失败: ${error.message}`);
+  }
+}
+
+/**
+ * SVN Copy
+ */
+async function svnCopyPath(srcUri?: vscode.Uri): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) { vscode.window.showErrorMessage('未检测到SVN命令行工具'); return; }
+    let src = srcUri?.fsPath;
+    if (!src && vscode.window.activeTextEditor) src = vscode.window.activeTextEditor.document.uri.fsPath;
+    if (!src) { vscode.window.showErrorMessage('请选择源文件/目录'); return; }
+    if (!await svnService.isInWorkingCopy(src)) { vscode.window.showErrorMessage('源不在SVN工作副本中'); return; }
+    const stat = fs.statSync(src);
+    const dst = await vscode.window.showInputBox({
+      prompt: 'SVN Copy 目标路径',
+      value: src + (stat.isDirectory() ? '-copy' : '.copy'),
+      placeHolder: '本地路径或 svn URL'
+    });
+    if (!dst) return;
+    await svnService.copyPath(src, dst.trim());
+    vscode.window.showInformationMessage(`SVN Copy 完成: ${dst}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`SVN Copy 失败: ${error.message}`);
+  }
+}
+
+/**
+ * SVN Move / Rename
+ */
+async function svnMovePath(srcUri?: vscode.Uri): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) { vscode.window.showErrorMessage('未检测到SVN命令行工具'); return; }
+    let src = srcUri?.fsPath;
+    if (!src && vscode.window.activeTextEditor) src = vscode.window.activeTextEditor.document.uri.fsPath;
+    if (!src) { vscode.window.showErrorMessage('请选择源文件/目录'); return; }
+    if (!await svnService.isInWorkingCopy(src)) { vscode.window.showErrorMessage('源不在SVN工作副本中'); return; }
+    const op = await vscode.window.showQuickPick(
+      [
+        { label: '$(edit) 重命名（同目录）', value: 'rename' },
+        { label: '$(arrow-right) 移动到其他路径', value: 'move' }
+      ],
+      { placeHolder: '选择操作' }
+    );
+    if (!op) return;
+    let dst: string | undefined;
+    if (op.value === 'rename') {
+      const newName = await vscode.window.showInputBox({ prompt: '新名称', value: path.basename(src) });
+      if (!newName) return;
+      dst = path.join(path.dirname(src), newName.trim());
+    } else {
+      dst = await vscode.window.showInputBox({ prompt: '目标路径', value: src, placeHolder: '完整路径或 URL' });
+      if (!dst) return;
+    }
+    await svnService.movePath(src, dst.trim());
+    vscode.window.showInformationMessage(`SVN Move 完成: ${dst}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`SVN Move 失败: ${error.message}`);
+  }
+}
+
+/**
+ * SVN Relocate
+ */
+async function svnRelocate(folderUri?: vscode.Uri): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) { vscode.window.showErrorMessage('未检测到SVN命令行工具'); return; }
+    let folder = folderUri?.fsPath;
+    if (!folder && vscode.workspace.workspaceFolders?.length) folder = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    if (!folder) { vscode.window.showErrorMessage('请选择目录'); return; }
+    if (!await svnService.isInWorkingCopy(folder)) { vscode.window.showErrorMessage('不在SVN工作副本中'); return; }
+    const currentUrl = await svnService.getCurrentUrl(folder);
+    const newUrl = await vscode.window.showInputBox({
+      prompt: '输入新 URL',
+      value: currentUrl,
+      placeHolder: '例如 https://new-server.example.com/svn/repo/trunk'
+    });
+    if (!newUrl || newUrl.trim() === currentUrl) return;
+    const ok = await vscode.window.showWarningMessage(
+      `将工作副本重定位：\n从: ${currentUrl}\n到: ${newUrl}`,
+      { modal: true }, '确认'
+    );
+    if (ok !== '确认') return;
+    await svnService.relocate(folder, newUrl.trim());
+    vscode.window.showInformationMessage('SVN Relocate 完成');
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`Relocate 失败: ${error.message}`);
+  }
+}
+
+/**
+ * 创建分支 / Tag
+ */
+async function svnCreateBranchTag(folderUri?: vscode.Uri): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) { vscode.window.showErrorMessage('未检测到SVN命令行工具'); return; }
+    let folder = folderUri?.fsPath;
+    if (!folder && vscode.workspace.workspaceFolders?.length) folder = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    if (!folder) { vscode.window.showErrorMessage('请选择目录'); return; }
+    if (!await svnService.isInWorkingCopy(folder)) { vscode.window.showErrorMessage('不在SVN工作副本中'); return; }
+
+    const kindPick = await vscode.window.showQuickPick(
+      [
+        { label: '$(repo-forked) 创建分支 (Branch)', value: 'branches' },
+        { label: '$(tag) 创建标签 (Tag)', value: 'tags' }
+      ],
+      { placeHolder: '选择创建类型' }
+    );
+    if (!kindPick) return;
+
+    const repoRoot = await svnService.getRepoRoot(folder);
+    const currentUrl = await svnService.getCurrentUrl(folder);
+
+    const name = await vscode.window.showInputBox({
+      prompt: kindPick.value === 'branches' ? '分支名称' : 'Tag 名称',
+      placeHolder: '例如 v1.0.0 或 feature-x',
+      validateInput: v => v.trim().length === 0 ? '名称不能为空' : null
+    });
+    if (!name) return;
+
+    const dstUrl = `${repoRoot.replace(/\/$/, '')}/${kindPick.value}/${name.trim()}`;
+
+    const srcChoice = await vscode.window.showQuickPick(
+      [
+        { label: '从当前 URL 创建', description: currentUrl, value: 'current' },
+        { label: '从 HEAD 主干创建', description: `${repoRoot.replace(/\/$/, '')}/trunk`, value: 'trunk' },
+        { label: '自定义源 URL…', value: 'custom' }
+      ],
+      { placeHolder: '选择源' }
+    );
+    if (!srcChoice) return;
+    let srcUrl = currentUrl;
+    if (srcChoice.value === 'trunk') srcUrl = `${repoRoot.replace(/\/$/, '')}/trunk`;
+    else if (srcChoice.value === 'custom') {
+      const v = await vscode.window.showInputBox({ prompt: '输入源 URL', value: currentUrl });
+      if (!v) return;
+      srcUrl = v.trim();
+    }
+
+    const message = await vscode.window.showInputBox({
+      prompt: '提交信息',
+      value: kindPick.value === 'branches' ? `Create branch ${name}` : `Create tag ${name}`,
+      validateInput: v => v.trim().length === 0 ? '不能为空' : null
+    });
+    if (!message) return;
+
+    await svnService.createBranchOrTag(folder, srcUrl, dstUrl, message);
+    vscode.window.showInformationMessage(`已创建: ${dstUrl}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`创建分支/Tag 失败: ${error.message}`);
+  }
+}
+
+/**
+ * 仓库浏览器：快速浏览 SVN 仓库目录结构
+ */
+async function svnRepoBrowser(folderUri?: vscode.Uri): Promise<void> {
+  try {
+    if (!await svnService.isSvnInstalled()) { vscode.window.showErrorMessage('未检测到SVN命令行工具'); return; }
+    let startUrl: string | undefined;
+    let folder = folderUri?.fsPath;
+    if (!folder && vscode.workspace.workspaceFolders?.length) folder = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    if (folder && await svnService.isInWorkingCopy(folder)) {
+      try {
+        startUrl = await svnService.getRepoRoot(folder);
+      } catch { /* ignore */ }
+    }
+    if (!startUrl) {
+      const v = await vscode.window.showInputBox({ prompt: '输入仓库 URL', placeHolder: 'http://svn.example.com/svn/repo' });
+      if (!v) return;
+      startUrl = v.trim();
+    }
+
+    let currentUrl = startUrl;
+    while (true) {
+      let entries: string[] = [];
+      try {
+        entries = await svnService.listRepo(currentUrl);
+      } catch (error: any) {
+        vscode.window.showErrorMessage(`列出失败: ${error.message}`);
+        return;
+      }
+      type Item = vscode.QuickPickItem & { value: string; isDir?: boolean; isUp?: boolean; action?: string };
+      const items: Item[] = [];
+      // 返回上级
+      if (currentUrl.replace(/\/$/, '') !== startUrl.replace(/\/$/, '')) {
+        items.push({ label: '$(arrow-up) ..  返回上一级', value: '..', isUp: true });
+      }
+      // 操作
+      items.push({ label: '$(file-directory) 使用当前路径检出…', value: currentUrl, action: 'checkout' });
+      items.push({ label: '$(history) 查看当前路径日志…', value: currentUrl, action: 'log' });
+      items.push({ label: '', kind: vscode.QuickPickItemKind.Separator } as any);
+      for (const entry of entries) {
+        const isDir = entry.endsWith('/');
+        items.push({
+          label: (isDir ? '$(folder) ' : '$(file) ') + entry,
+          value: entry,
+          isDir
+        });
+      }
+      const picked = await vscode.window.showQuickPick(items, {
+        placeHolder: currentUrl,
+        matchOnDescription: true
+      });
+      if (!picked) return;
+      if (picked.isUp) {
+        currentUrl = currentUrl.replace(/\/$/, '').replace(/\/[^/]+$/, '');
+        continue;
+      }
+      if (picked.action === 'checkout') {
+        await vscode.commands.executeCommand('vscode-svn.checkout');
+        return;
+      }
+      if (picked.action === 'log') {
+        vscode.env.clipboard.writeText(currentUrl);
+        vscode.window.showInformationMessage(`URL 已复制到剪贴板: ${currentUrl}`);
+        return;
+      }
+      if (picked.isDir) {
+        currentUrl = `${currentUrl.replace(/\/$/, '')}/${picked.value.replace(/\/$/, '')}`;
+        continue;
+      }
+      // 文件：提供复制 URL、查看内容选项
+      const fileOp = await vscode.window.showQuickPick(
+        [
+          { label: '$(clippy) 复制 URL', value: 'copy' },
+          { label: '$(eye) 查看文件内容（svn cat）', value: 'cat' }
+        ],
+        { placeHolder: `文件: ${picked.value}` }
+      );
+      if (!fileOp) continue;
+      const fileUrl = `${currentUrl.replace(/\/$/, '')}/${picked.value}`;
+      if (fileOp.value === 'copy') {
+        await vscode.env.clipboard.writeText(fileUrl);
+        vscode.window.showInformationMessage(`已复制: ${fileUrl}`);
+      } else if (fileOp.value === 'cat') {
+        try {
+          const cwd = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || os.tmpdir();
+          const content = await svnService.executeSvnCommand(`cat "${fileUrl}"`, cwd);
+          const doc = await vscode.workspace.openTextDocument({ content, language: 'plaintext' });
+          await vscode.window.showTextDocument(doc);
+        } catch (e: any) {
+          vscode.window.showErrorMessage(`查看失败: ${e.message}`);
+        }
+      }
+    }
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`仓库浏览失败: ${error.message}`);
+  }
+}
+
 /**
  * 锁定文件（svn lock）
  * @param filePath 文件路径
@@ -1590,6 +2125,390 @@ async function svnAddItem(itemPath: string): Promise<void> {
   }
 }
 
+// ===================== Update to Revision =====================
+async function svnUpdateToRevision(uri?: vscode.Uri): Promise<void> {
+  let fsPath: string | undefined;
+  if (uri) fsPath = uri.fsPath;
+  else {
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor) fsPath = activeEditor.document.uri.fsPath;
+    else if (vscode.workspace.workspaceFolders?.length) fsPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+  }
+  if (!fsPath) { vscode.window.showErrorMessage('请选择文件或目录'); return; }
+  const revision = await vscode.window.showInputBox({
+    prompt: '输入目标版本号（例如: 12345 或 HEAD）',
+    placeHolder: 'HEAD',
+    value: 'HEAD',
+    ignoreFocusOut: true
+  });
+  if (!revision) return;
+  try {
+    await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `SVN Update to r${revision}...`,
+      cancellable: false
+    }, async () => {
+      await svnService.updateToRevision(fsPath!, revision.trim());
+    });
+    vscode.window.showInformationMessage(`已更新到版本 r${revision}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`Update to Revision 失败: ${error.message}`);
+  }
+}
+
+// ===================== Check for Modifications =====================
+async function svnCheckForModifications(uri?: vscode.Uri): Promise<void> {
+  let folderPath: string | undefined;
+  if (uri) folderPath = uri.fsPath;
+  else if (vscode.workspace.workspaceFolders?.length) folderPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+  if (!folderPath) { vscode.window.showErrorMessage('请打开工作区'); return; }
+  let entries: Array<{filePath: string; status: string; char: string}> = [];
+  await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: '正在扫描修改状态...',
+    cancellable: false
+  }, async () => {
+    entries = await svnService.getStatusList(folderPath!);
+  });
+  if (entries.length === 0) {
+    vscode.window.showInformationMessage('没有发现修改的文件（工作副本是最新状态）');
+    return;
+  }
+  const charIcon: Record<string, string> = {
+    'M': '$(edit)', 'A': '$(add)', 'D': '$(trash)', 'C': '$(warning)',
+    '?': '$(question)', '!': '$(alert)', 'R': '$(replace-all)', '~': '$(diff-modified)'
+  };
+  const items = entries.map(e => ({
+    label: `${charIcon[e.char] || '$(circle-outline)'} ${path.basename(e.filePath)}`,
+    description: path.relative(folderPath!, e.filePath),
+    detail: e.status,
+    filePath: e.filePath,
+    char: e.char
+  }));
+  const selected = await vscode.window.showQuickPick(items, {
+    placeHolder: `发现 ${entries.length} 个修改文件 — 选择文件执行操作`,
+    matchOnDescription: true,
+    matchOnDetail: true
+  });
+  if (!selected) return;
+  const fileUri = vscode.Uri.file(selected.filePath);
+  const actions: Array<{label: string; command: string}> = [
+    { label: '$(diff) 查看 Diff', command: 'vscode-svn.diff' },
+    { label: '$(discard) Revert', command: 'vscode-svn.revertFile' },
+    { label: '$(history) 查看日志', command: 'vscode-svn.viewLog' }
+  ];
+  if (selected.char === 'M' || selected.char === 'A') {
+    actions.unshift({ label: '$(cloud-upload) Commit', command: 'vscode-svn.commitFile' });
+  }
+  const action = await vscode.window.showQuickPick(actions.map(a => a.label), {
+    placeHolder: `对 ${path.basename(selected.filePath)} 执行操作`
+  });
+  if (!action) return;
+  const found = actions.find(a => a.label === action);
+  if (found) await vscode.commands.executeCommand(found.command, fileUri);
+}
+
+// ===================== Diff with Revision =====================
+async function svnDiffWithRevision(uri?: vscode.Uri): Promise<void> {
+  let fsPath: string | undefined;
+  if (uri) fsPath = uri.fsPath;
+  else {
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor) fsPath = activeEditor.document.uri.fsPath;
+  }
+  if (!fsPath) { vscode.window.showErrorMessage('请选择文件'); return; }
+  const mode = await vscode.window.showQuickPick([
+    { label: '$(diff) 与指定版本比较', value: 'single' },
+    { label: '$(diff-multiple) 比较两个版本之间', value: 'range' }
+  ], { placeHolder: '选择比较模式' });
+  if (!mode) return;
+  const rev1 = await vscode.window.showInputBox({
+    prompt: mode.value === 'range' ? '输入起始版本号（旧版本）' : '输入要比较的版本号',
+    placeHolder: 'BASE 或数字版本号',
+    ignoreFocusOut: true
+  });
+  if (rev1 === undefined) return;
+  let rev2: string | undefined;
+  if (mode.value === 'range') {
+    rev2 = await vscode.window.showInputBox({
+      prompt: '输入结束版本号（新版本）',
+      placeHolder: 'HEAD 或数字版本号',
+      value: 'HEAD',
+      ignoreFocusOut: true
+    });
+    if (rev2 === undefined) return;
+  }
+  try {
+    const diffContent = await svnService.diffWithRevision(fsPath, rev1 || 'BASE', rev2);
+    if (!diffContent.trim()) {
+      vscode.window.showInformationMessage('没有差异');
+      return;
+    }
+    const tmpFile = path.join(os.tmpdir(), `svn-diff-r${rev1}${rev2 ? '-r' + rev2 : ''}-${Date.now()}.diff`);
+    fs.writeFileSync(tmpFile, diffContent, 'utf8');
+    const doc = await vscode.workspace.openTextDocument(tmpFile);
+    await vscode.window.showTextDocument(doc, { preview: true });
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`Diff with Revision 失败: ${error.message}`);
+  }
+}
+
+// ===================== Rollback (Reverse Merge) =====================
+async function svnRollback(uri?: vscode.Uri): Promise<void> {
+  let folderPath: string | undefined;
+  if (uri) {
+    try {
+      const stat = fs.statSync(uri.fsPath);
+      folderPath = stat.isDirectory() ? uri.fsPath : path.dirname(uri.fsPath);
+    } catch { folderPath = path.dirname(uri.fsPath); }
+  } else if (vscode.workspace.workspaceFolders?.length) {
+    folderPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+  }
+  if (!folderPath) { vscode.window.showErrorMessage('请选择目录'); return; }
+  const revision = await vscode.window.showInputBox({
+    prompt: '输入要回滚的版本号（将执行反向合并，撤销该版本引入的所有更改）',
+    placeHolder: '例如: 12345',
+    ignoreFocusOut: true,
+    validateInput: v => v && /^\d+$/.test(v.trim()) ? null : '请输入纯数字版本号'
+  });
+  if (!revision) return;
+  const confirm = await vscode.window.showWarningMessage(
+    `确认要反向合并（回滚）版本 r${revision} 的所有更改吗？\n这会修改工作副本，需要再次提交才能生效。`,
+    { modal: true }, '确认回滚', '取消'
+  );
+  if (confirm !== '确认回滚') return;
+  try {
+    const result = await vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: `SVN Rollback r${revision}...`,
+      cancellable: false
+    }, async () => {
+      return await svnService.rollbackRevision(folderPath!, revision.trim());
+    });
+    const lines = result.split('\n').filter(l => l.trim()).length;
+    const choice = await vscode.window.showInformationMessage(
+      `反向合并完成，${lines} 项文件已变更。请检查后提交以完成回滚。`,
+      '立即提交', '稍后'
+    );
+    if (choice === '立即提交') {
+      await vscode.commands.executeCommand('vscode-svn.uploadFolder', vscode.Uri.file(folderPath));
+    }
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`Rollback 失败: ${error.message}`);
+  }
+}
+
+// ===================== SVN Cat / Show at Revision =====================
+async function svnCatFile(uri?: vscode.Uri): Promise<void> {
+  let fsPath: string | undefined;
+  if (uri) fsPath = uri.fsPath;
+  else {
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor) fsPath = activeEditor.document.uri.fsPath;
+  }
+  if (!fsPath) { vscode.window.showErrorMessage('请选择文件'); return; }
+  const revision = await vscode.window.showInputBox({
+    prompt: '输入要查看的版本号',
+    placeHolder: 'HEAD 或数字版本号',
+    value: 'HEAD',
+    ignoreFocusOut: true
+  });
+  if (!revision) return;
+  try {
+    const content = await svnService.catFile(fsPath, revision.trim() || 'HEAD');
+    const ext = path.extname(fsPath);
+    const tmpFile = path.join(os.tmpdir(), `svn-cat-r${revision}-${path.basename(fsPath, ext)}${ext}`);
+    fs.writeFileSync(tmpFile, content, 'utf8');
+    const doc = await vscode.workspace.openTextDocument(tmpFile);
+    await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.Beside });
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`查看历史版本失败: ${error.message}`);
+  }
+}
+
+// ===================== Copy URL to Clipboard =====================
+async function svnCopyUrl(uri?: vscode.Uri): Promise<void> {
+  let fsPath: string | undefined;
+  if (uri) fsPath = uri.fsPath;
+  else {
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor) fsPath = activeEditor.document.uri.fsPath;
+    else if (vscode.workspace.workspaceFolders?.length) fsPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+  }
+  if (!fsPath) { vscode.window.showErrorMessage('请选择文件或目录'); return; }
+  try {
+    const url = await svnService.getFileUrl(fsPath);
+    await vscode.env.clipboard.writeText(url);
+    vscode.window.showInformationMessage(`SVN URL 已复制: ${url}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`获取 SVN URL 失败: ${error.message}`);
+  }
+}
+
+// ===================== Manage Externals =====================
+async function svnManageExternals(uri?: vscode.Uri): Promise<void> {
+  let dirPath: string | undefined;
+  if (uri) {
+    try {
+      const stat = fs.statSync(uri.fsPath);
+      dirPath = stat.isDirectory() ? uri.fsPath : path.dirname(uri.fsPath);
+    } catch { dirPath = uri ? path.dirname(uri.fsPath) : undefined; }
+  } else if (vscode.workspace.workspaceFolders?.length) {
+    dirPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+  }
+  if (!dirPath) { vscode.window.showErrorMessage('请选择目录'); return; }
+  let current = '';
+  try { current = await svnService.getExternals(dirPath); } catch { /* none */ }
+  const action = await vscode.window.showQuickPick([
+    { label: '$(eye) 查看 svn:externals', value: 'view' },
+    { label: '$(edit) 编辑 svn:externals', value: 'edit' },
+    { label: '$(trash) 清除 svn:externals', value: 'clear' }
+  ], { placeHolder: `svn:externals — ${path.basename(dirPath)}` });
+  if (!action) return;
+  if (action.value === 'view') {
+    if (!current) { vscode.window.showInformationMessage('该目录没有设置 svn:externals'); }
+    else { vscode.window.showInformationMessage(`svn:externals:\n${current}`, { modal: true }); }
+    return;
+  }
+  if (action.value === 'clear') {
+    const confirm = await vscode.window.showWarningMessage('确认清除 svn:externals 属性？', { modal: true }, '确认');
+    if (confirm !== '确认') return;
+    try {
+      await svnService.executeSvnCommand('propdel svn:externals .', dirPath);
+      vscode.window.showInformationMessage('已清除 svn:externals');
+    } catch (e: any) { vscode.window.showErrorMessage(`清除失败: ${e.message}`); }
+    return;
+  }
+  // edit
+  const newValue = await vscode.window.showInputBox({
+    prompt: '输入 svn:externals（格式: URL local_path，每行一条）',
+    value: current,
+    ignoreFocusOut: true,
+    placeHolder: 'svn://repo/common/lib lib'
+  });
+  if (newValue === undefined) return;
+  try {
+    await svnService.setExternals(dirPath, newValue);
+    vscode.window.showInformationMessage('svn:externals 已更新');
+  } catch (e: any) { vscode.window.showErrorMessage(`设置失败: ${e.message}`); }
+}
+
+// ===================== Sparse Checkout =====================
+async function svnSparseCheckout(): Promise<void> {
+  const url = await vscode.window.showInputBox({
+    prompt: '输入 SVN 仓库 URL',
+    placeHolder: 'svn://... 或 http(s)://...',
+    ignoreFocusOut: true
+  });
+  if (!url) return;
+  const depth = await vscode.window.showQuickPick([
+    { label: 'empty — 仅检出根目录（不含文件）', value: 'empty' },
+    { label: 'files — 仅检出根目录下的文件', value: 'files' },
+    { label: 'immediates — 检出直接子目录（不递归）', value: 'immediates' },
+    { label: 'infinity — 完整检出（默认）', value: 'infinity' }
+  ], { placeHolder: '选择检出深度' });
+  if (!depth) return;
+  const targetFolder = await vscode.window.showOpenDialog({
+    canSelectFiles: false,
+    canSelectFolders: true,
+    canSelectMany: false,
+    openLabel: '选择检出目标目录'
+  });
+  if (!targetFolder || targetFolder.length === 0) return;
+  const targetDir = targetFolder[0].fsPath;
+  const folderName = await vscode.window.showInputBox({
+    prompt: '输入检出后的子文件夹名称（留空使用 URL 最后一段）',
+    value: url.split('/').filter(p => p).pop() || 'svn_checkout',
+    ignoreFocusOut: true
+  });
+  if (folderName === undefined) return;
+  const finalTarget = path.join(targetDir, folderName || 'svn_checkout');
+  await vscode.window.withProgress({
+    location: vscode.ProgressLocation.Notification,
+    title: `SVN Sparse Checkout (${depth.value})...`,
+    cancellable: false
+  }, async () => {
+    const result = await svnService.sparseCheckout(url, finalTarget, depth.value);
+    if (result.success) {
+      const choice = await vscode.window.showInformationMessage(
+        `Sparse Checkout 完成：${finalTarget}`,
+        '打开目录'
+      );
+      if (choice === '打开目录') {
+        await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(finalTarget), { forceNewWindow: false });
+      }
+    } else {
+      vscode.window.showErrorMessage(`Sparse Checkout 失败: ${result.message}`);
+    }
+  });
+}
+
+// ===================== Remove from Ignore =====================
+async function svnRemoveIgnore(uri?: vscode.Uri): Promise<void> {
+  let fsPath: string | undefined;
+  if (uri) fsPath = uri.fsPath;
+  if (!fsPath) { vscode.window.showErrorMessage('请选择文件或目录'); return; }
+  const parentDir = path.dirname(fsPath);
+  const name = path.basename(fsPath);
+  const pattern = await vscode.window.showInputBox({
+    prompt: '输入要从 svn:ignore 中移除的 pattern',
+    value: name,
+    ignoreFocusOut: true
+  });
+  if (!pattern) return;
+  try {
+    await svnService.removeIgnore(parentDir, pattern);
+    vscode.window.showInformationMessage(`已从 svn:ignore 中移除: ${pattern}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`移除 ignore 失败: ${error.message}`);
+  }
+}
+
+// ===================== Quick Set File Properties =====================
+async function svnQuickSetFileProps(uri?: vscode.Uri): Promise<void> {
+  let fsPath: string | undefined;
+  if (uri) fsPath = uri.fsPath;
+  else {
+    const activeEditor = vscode.window.activeTextEditor;
+    if (activeEditor) fsPath = activeEditor.document.uri.fsPath;
+  }
+  if (!fsPath) { vscode.window.showErrorMessage('请选择文件'); return; }
+  try {
+    const stat = fs.statSync(fsPath);
+    if (stat.isDirectory()) { vscode.window.showErrorMessage('此功能仅适用于文件'); return; }
+  } catch { vscode.window.showErrorMessage('文件不存在'); return; }
+  const prop = await vscode.window.showQuickPick([
+    { label: '$(file-binary) 标记为二进制文件', prop: 'svn:mime-type', value: 'application/octet-stream' },
+    { label: '$(file-code) 标记为文本文件', prop: 'svn:mime-type', value: 'text/plain' },
+    { label: '$(symbol-property) 设置行尾风格 (svn:eol-style)', prop: 'svn:eol-style', value: '' },
+    { label: '$(tag) 设置关键字替换 (svn:keywords)', prop: 'svn:keywords', value: '' },
+    { label: '$(lock) 设置 svn:needs-lock', prop: 'svn:needs-lock', value: '*' }
+  ], { placeHolder: `快速设置文件属性 — ${path.basename(fsPath)}` });
+  if (!prop) return;
+  let value = prop.value;
+  if (!value) {
+    if (prop.prop === 'svn:eol-style') {
+      const eol = await vscode.window.showQuickPick(['native', 'LF', 'CRLF', 'CR'], { placeHolder: '选择行尾风格' });
+      if (!eol) return;
+      value = eol;
+    } else if (prop.prop === 'svn:keywords') {
+      const kw = await vscode.window.showInputBox({
+        prompt: '输入关键字（空格分隔: Id Author Date Rev URL HeadURL）',
+        value: 'Id Author Date Rev',
+        ignoreFocusOut: true
+      });
+      if (kw === undefined) return;
+      value = kw;
+    }
+  }
+  try {
+    await svnService.propSet(fsPath, prop.prop, value);
+    vscode.window.showInformationMessage(`已设置 ${prop.prop} = ${value}`);
+  } catch (error: any) {
+    vscode.window.showErrorMessage(`设置属性失败: ${error.message}`);
+  }
+}
+
 export function activate(context: vscode.ExtensionContext) {
   console.log('VSCode SVN 扩展已激活');
   
@@ -2089,6 +3008,74 @@ export function activate(context: vscode.ExtensionContext) {
     await svnAddItem(itemUri.fsPath);
   });
 
+  // ============ 新增命令注册 ============
+  const svnExportCommand = vscode.commands.registerCommand('vscode-svn.export', async (uri?: vscode.Uri) => {
+    await svnExport(uri);
+  });
+  const svnImportCommand = vscode.commands.registerCommand('vscode-svn.import', async (uri?: vscode.Uri) => {
+    await svnImport(uri);
+  });
+  const svnCreatePatchCommand = vscode.commands.registerCommand('vscode-svn.createPatch', async (uri?: vscode.Uri) => {
+    await svnCreatePatch(uri);
+  });
+  const svnApplyPatchCommand = vscode.commands.registerCommand('vscode-svn.applyPatch', async (uri?: vscode.Uri) => {
+    await svnApplyPatch(uri);
+  });
+  const svnManagePropertiesCommand = vscode.commands.registerCommand('vscode-svn.manageProperties', async (uri?: vscode.Uri) => {
+    await svnManageProperties(uri);
+  });
+  const svnAddIgnoreCommand = vscode.commands.registerCommand('vscode-svn.addIgnore', async (uri?: vscode.Uri) => {
+    await svnAddIgnore(uri);
+  });
+  const svnCopyPathCommand = vscode.commands.registerCommand('vscode-svn.copyPath', async (uri?: vscode.Uri) => {
+    await svnCopyPath(uri);
+  });
+  const svnMovePathCommand = vscode.commands.registerCommand('vscode-svn.movePath', async (uri?: vscode.Uri) => {
+    await svnMovePath(uri);
+  });
+  const svnRelocateCommand = vscode.commands.registerCommand('vscode-svn.relocate', async (uri?: vscode.Uri) => {
+    await svnRelocate(uri);
+  });
+  const svnCreateBranchTagCommand = vscode.commands.registerCommand('vscode-svn.createBranchTag', async (uri?: vscode.Uri) => {
+    await svnCreateBranchTag(uri);
+  });
+  const svnRepoBrowserCommand = vscode.commands.registerCommand('vscode-svn.repoBrowser', async (uri?: vscode.Uri) => {
+    await svnRepoBrowser(uri);
+  });
+
+  // ============ 第二批新增命令注册 ============
+  const svnUpdateToRevisionCommand = vscode.commands.registerCommand('vscode-svn.updateToRevision', async (uri?: vscode.Uri) => {
+    await svnUpdateToRevision(uri);
+  });
+  const svnCheckForModificationsCommand = vscode.commands.registerCommand('vscode-svn.checkForModifications', async (uri?: vscode.Uri) => {
+    await svnCheckForModifications(uri);
+  });
+  const svnDiffWithRevisionCommand = vscode.commands.registerCommand('vscode-svn.diffWithRevision', async (uri?: vscode.Uri) => {
+    await svnDiffWithRevision(uri);
+  });
+  const svnRollbackCommand = vscode.commands.registerCommand('vscode-svn.rollback', async (uri?: vscode.Uri) => {
+    await svnRollback(uri);
+  });
+  const svnCatFileCommand = vscode.commands.registerCommand('vscode-svn.catFile', async (uri?: vscode.Uri) => {
+    await svnCatFile(uri);
+  });
+  const svnCopyUrlCommand = vscode.commands.registerCommand('vscode-svn.copyUrl', async (uri?: vscode.Uri) => {
+    await svnCopyUrl(uri);
+  });
+  const svnManageExternalsCommand = vscode.commands.registerCommand('vscode-svn.manageExternals', async (uri?: vscode.Uri) => {
+    await svnManageExternals(uri);
+  });
+  const svnSparseCheckoutCommand = vscode.commands.registerCommand('vscode-svn.sparseCheckout', async () => {
+    await svnSparseCheckout();
+  });
+  const svnRemoveIgnoreCommand = vscode.commands.registerCommand('vscode-svn.removeIgnore', async (uri?: vscode.Uri) => {
+    await svnRemoveIgnore(uri);
+  });
+  const svnQuickSetFilePropsCommand = vscode.commands.registerCommand('vscode-svn.quickSetProps', async (uri?: vscode.Uri) => {
+    await svnQuickSetFileProps(uri);
+  });
+
+
   // 底部状态栏 “SVN” 快捷入口：点击弹出目录级 SVN 命令面板
   const showRootMenuCommand = vscode.commands.registerCommand('vscode-svn.showRootMenu', async () => {
     const folders = vscode.workspace.workspaceFolders;
@@ -2121,7 +3108,23 @@ export function activate(context: vscode.ExtensionContext) {
       { label: isZh ? '$(repo-forked) 切换'            : '$(repo-forked) Switch...',     command: 'vscode-svn.switch',                   needsUri: true },
       { label: isZh ? '$(git-merge) 合并分支'    : '$(git-merge) Merge...',        command: 'vscode-svn.mergeBranch',              needsUri: true },
       { label: isZh ? '$(add) 添加'                    : '$(add) Add...',                command: 'vscode-svn.addItem',                  needsUri: true },
-      { label: isZh ? '$(trash) SVN 删除'              : '$(trash) Delete',              command: 'vscode-svn.svnDelete',                needsUri: true }
+      { label: isZh ? '$(trash) SVN 删除'              : '$(trash) Delete',              command: 'vscode-svn.svnDelete',                needsUri: true },
+      { label: isZh ? '$(file-zip) 导出 (Export)'        : '$(file-zip) Export...',         command: 'vscode-svn.export',                   needsUri: true },
+      { label: isZh ? '$(diff) 创建 Patch'              : '$(diff) Create Patch...',       command: 'vscode-svn.createPatch',              needsUri: true },
+      { label: isZh ? '$(diff-added) 应用 Patch'        : '$(diff-added) Apply Patch...',  command: 'vscode-svn.applyPatch',               needsUri: true },
+      { label: isZh ? '$(list-unordered) 属性管理'      : '$(list-unordered) Properties...', command: 'vscode-svn.manageProperties',      needsUri: true },
+      { label: isZh ? '$(repo-forked) 创建分支/Tag'     : '$(repo-forked) Branch/Tag...', command: 'vscode-svn.createBranchTag',         needsUri: true },
+      { label: isZh ? '$(link) 重定位 (Relocate)'    : '$(link) Relocate...',           command: 'vscode-svn.relocate',                 needsUri: true },
+      { label: isZh ? '$(remote) 仓库浏览器'        : '$(remote) Repo Browser...',     command: 'vscode-svn.repoBrowser',              needsUri: true },
+      { label: isZh ? '$(cloud-upload) 导入 (Import)'    : '$(cloud-upload) Import...',     command: 'vscode-svn.import',                   needsUri: false },
+      { label: isZh ? '$(sync) 更新到指定版本'  : '$(sync) Update to Revision...',  command: 'vscode-svn.updateToRevision',          needsUri: true },
+      { label: isZh ? '$(search) 查看修改状态'  : '$(search) Check for Modifications',command: 'vscode-svn.checkForModifications',     needsUri: true },
+      { label: isZh ? '$(diff) 与版本比较'      : '$(diff) Diff with Revision...',    command: 'vscode-svn.diffWithRevision',          needsUri: true },
+      { label: isZh ? '$(history) 回滚某版本'    : '$(history) Rollback Revision...',  command: 'vscode-svn.rollback',                  needsUri: true },
+      { label: isZh ? '$(eye) 查看历史版本'  : '$(eye) Show at Revision (cat)...',  command: 'vscode-svn.catFile',                  needsUri: false },
+      { label: isZh ? '$(clippy) 复制 SVN URL'           : '$(clippy) Copy SVN URL',            command: 'vscode-svn.copyUrl',                   needsUri: true },
+      { label: isZh ? '$(references) Externals 管理'  : '$(references) Manage Externals...', command: 'vscode-svn.manageExternals',           needsUri: true },
+      { label: isZh ? '$(folder) 稀疏检出'          : '$(folder) Sparse Checkout...',      command: 'vscode-svn.sparseCheckout',            needsUri: false }
     ];
     const picked = await vscode.window.showQuickPick(actions, { placeHolder: isZh ? 'SVN 目录操作' : 'SVN directory actions' });
     if (!picked) return;
@@ -2154,7 +3157,28 @@ export function activate(context: vscode.ExtensionContext) {
     ['vscode-svn.mergeBranch',             'vscode-svn.mergeBranch.zh'],
     ['vscode-svn.addItem',                 'vscode-svn.addItem.zh'],
     ['vscode-svn.lockFile',                'vscode-svn.lockFile.zh'],
-    ['vscode-svn.unlockFile',              'vscode-svn.unlockFile.zh']
+    ['vscode-svn.unlockFile',              'vscode-svn.unlockFile.zh'],
+    ['vscode-svn.export',                  'vscode-svn.export.zh'],
+    ['vscode-svn.import',                  'vscode-svn.import.zh'],
+    ['vscode-svn.createPatch',             'vscode-svn.createPatch.zh'],
+    ['vscode-svn.applyPatch',              'vscode-svn.applyPatch.zh'],
+    ['vscode-svn.manageProperties',        'vscode-svn.manageProperties.zh'],
+    ['vscode-svn.addIgnore',               'vscode-svn.addIgnore.zh'],
+    ['vscode-svn.copyPath',                'vscode-svn.copyPath.zh'],
+    ['vscode-svn.movePath',                'vscode-svn.movePath.zh'],
+    ['vscode-svn.relocate',                'vscode-svn.relocate.zh'],
+    ['vscode-svn.createBranchTag',         'vscode-svn.createBranchTag.zh'],
+    ['vscode-svn.repoBrowser',             'vscode-svn.repoBrowser.zh'],
+    ['vscode-svn.updateToRevision',        'vscode-svn.updateToRevision.zh'],
+    ['vscode-svn.checkForModifications',   'vscode-svn.checkForModifications.zh'],
+    ['vscode-svn.diffWithRevision',        'vscode-svn.diffWithRevision.zh'],
+    ['vscode-svn.rollback',                'vscode-svn.rollback.zh'],
+    ['vscode-svn.catFile',                 'vscode-svn.catFile.zh'],
+    ['vscode-svn.copyUrl',                 'vscode-svn.copyUrl.zh'],
+    ['vscode-svn.manageExternals',         'vscode-svn.manageExternals.zh'],
+    ['vscode-svn.sparseCheckout',          'vscode-svn.sparseCheckout.zh'],
+    ['vscode-svn.removeIgnore',            'vscode-svn.removeIgnore.zh'],
+    ['vscode-svn.quickSetProps',           'vscode-svn.quickSetProps.zh']
   ];
   const zhAliasDisposables = zhAliasPairs.map(([origin, alias]) =>
     vscode.commands.registerCommand(alias, (...args: any[]) => vscode.commands.executeCommand(origin, ...args))
@@ -2197,6 +3221,27 @@ export function activate(context: vscode.ExtensionContext) {
     cleanupCommand,
     switchCommand,
     addItemCommand,
+    svnExportCommand,
+    svnImportCommand,
+    svnCreatePatchCommand,
+    svnApplyPatchCommand,
+    svnManagePropertiesCommand,
+    svnAddIgnoreCommand,
+    svnCopyPathCommand,
+    svnMovePathCommand,
+    svnRelocateCommand,
+    svnCreateBranchTagCommand,
+    svnRepoBrowserCommand,
+    svnUpdateToRevisionCommand,
+    svnCheckForModificationsCommand,
+    svnDiffWithRevisionCommand,
+    svnRollbackCommand,
+    svnCatFileCommand,
+    svnCopyUrlCommand,
+    svnManageExternalsCommand,
+    svnSparseCheckoutCommand,
+    svnRemoveIgnoreCommand,
+    svnQuickSetFilePropsCommand,
     showRootMenuCommand,
     svnStatusBarItem,
     ...zhAliasDisposables
