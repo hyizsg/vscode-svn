@@ -71,6 +71,11 @@
 
             <!-- 版本选择器（Cherry-pick 模式） -->
             <div class="revision-picker" id="revisionPicker">
+                <!-- 加载按钮（默认不加载日志，点击后才拉取） -->
+                <div class="revision-load-bar" style="margin-bottom:8px;">
+                    <button id="loadRevisionsBtn" class="btn btn-secondary">🔄 加载版本日志</button>
+                    <span class="muted" id="loadRevisionsHint" style="margin-left:8px;font-size:12px;color:var(--vscode-descriptionForeground,#888);">请先选择合并源分支，再点击加载</span>
+                </div>
                 <!-- 过滤区 -->
                 <div class="revision-filter-bar">
                     <input type="text" id="revisionFilterInput" class="text-input filter-input"

@@ -2,21 +2,22 @@
     const vscode = acquireVsCodeApi();
     
     // 从状态中恢复或初始化
+    const persistentState = window.__persistentState || { uncheckedFiles: [], hiddenGroups: [] };
     const previousState = vscode.getState() || {
         selectedFiles: [],
         enabledTypes: ['modified', 'added', 'deleted', 'unversioned', 'missing'],
         selectedGroups: [],
-        selectedExtensions: [],
-        collapsedGroups: [],
-        lockedOnly: false
+        collapsedGroups: []
     };
 
     let selectedFiles = new Set(previousState.selectedFiles);
     let enabledTypes = new Set(previousState.enabledTypes);
     let selectedGroups = new Set(previousState.selectedGroups);
-    let selectedExtensions = new Set(previousState.selectedExtensions);
     let collapsedGroups = new Set(previousState.collapsedGroups);
-    let lockedOnly = !!previousState.lockedOnly;
+
+    // 持久化状态：记录手动取消勾选的文件和手动隐藏的分组
+    let uncheckedFiles = new Set(persistentState.uncheckedFiles || []);
+    let hiddenGroups = new Set(persistentState.hiddenGroups || []);
 
     // 行选择（右键、点击高亮用，不影响提交勾选）
     let activeFiles = new Set();
@@ -28,9 +29,16 @@
             selectedFiles: Array.from(selectedFiles),
             enabledTypes: Array.from(enabledTypes),
             selectedGroups: Array.from(selectedGroups),
-            selectedExtensions: Array.from(selectedExtensions),
-            collapsedGroups: Array.from(collapsedGroups),
-            lockedOnly: lockedOnly
+            collapsedGroups: Array.from(collapsedGroups)
+        });
+    }
+
+    // 同步持久化状态到 Extension 端
+    function syncPersistentState() {
+        vscode.postMessage({
+            command: 'savePersistentState',
+            uncheckedFiles: Array.from(uncheckedFiles),
+            hiddenGroups: Array.from(hiddenGroups)
         });
     }
     
@@ -54,12 +62,20 @@
             .map(item => item.getAttribute('data-path'));
         
         if (checked) {
-            visibleFiles.forEach(path => selectedFiles.add(path));
+            visibleFiles.forEach(path => {
+                selectedFiles.add(path);
+                uncheckedFiles.delete(path);
+            });
         } else {
-            visibleFiles.forEach(path => selectedFiles.delete(path));
+            visibleFiles.forEach(path => {
+                selectedFiles.delete(path);
+                uncheckedFiles.add(path);
+            });
         }
         updateCheckboxes();
-        saveState();  // 保存状态
+        saveState();
+        syncPersistentState();
+        updateFileCount();
     }
     
     // 同样在文件项的点击事件中添加状态保存
@@ -76,12 +92,16 @@
                 checkbox.addEventListener('change', (e) => {
                     if (e.target.checked) {
                         selectedFiles.add(filePath);
+                        uncheckedFiles.delete(filePath);
                     } else {
                         selectedFiles.delete(filePath);
+                        uncheckedFiles.add(filePath);
                     }
                     updateSelectAllCheckbox();
                     updateGroupSelectAllCheckboxes();
-                    saveState();  // 保存状态
+                    updateFileCount();
+                    saveState();
+                    syncPersistentState();
                 });
             }
 
@@ -164,7 +184,7 @@
     }
     
     function initializeExtensionFilter() {
-        // 已合并到 group-filter，此处保留空函数避免报错
+        // 已移除，保留空函数避免报错
     }
     
     function initializeEventListeners() {
@@ -174,16 +194,9 @@
         document.getElementById('deleted-checkbox').addEventListener('change', () => toggleFileType('deleted'));
         document.getElementById('unversioned-checkbox').addEventListener('change', () => toggleFileType('unversioned'));
         document.getElementById('missing-checkbox').addEventListener('change', () => toggleFileType('missing'));
-        // 仅锁定 复选框
-        const lockedOnlyCb = document.getElementById('lockedOnly-checkbox');
-        if (lockedOnlyCb) {
-            lockedOnlyCb.checked = lockedOnly;
-            lockedOnlyCb.addEventListener('change', () => {
-                lockedOnly = lockedOnlyCb.checked;
-                updateFileList();
-                saveState();
-            });
-        }
+
+        // Changelist 过滤复选框
+        initializeChangelistCheckboxes();
 
         // 全选复选框
         document.getElementById('selectAll').addEventListener('change', (e) => toggleAllFiles(e.target.checked));
@@ -195,133 +208,69 @@
         document.getElementById('submitButton').addEventListener('click', submitCommit);
         document.getElementById('generateAIButton').addEventListener('click', generateAILog);
 
-        // 分组筛选器
-        initializeGroupFilter();
-
         // 初始化页面状态
         updateFileList();
         updateCheckboxes();
 
-        // 首次加载时，默认全选所有可见文件
+        // 首次加载时，默认全选所有可见文件，但排除持久化记录中用户手动取消勾选的文件
         if (previousState.selectedFiles.length === 0) {
             const allFiles = Array.from(document.querySelectorAll('.file-item'))
                 .filter(item => item.style.display !== 'none')
                 .map(item => item.getAttribute('data-path'));
-            allFiles.forEach(path => selectedFiles.add(path));
+            allFiles.forEach(path => {
+                if (!uncheckedFiles.has(path)) {
+                    selectedFiles.add(path);
+                }
+            });
             updateCheckboxes();
             saveState();
         }
     }
 
-    function initializeGroupFilter() {
-        const container = document.getElementById('groupTagsContainer');
-        if (!container) return;
+    function initializeChangelistCheckboxes() {
+        const checkboxes = document.querySelectorAll('.changelist-filter-checkbox');
+        if (checkboxes.length === 0) return;
 
-        // 如果没有保存过状态，默认全选
-        const isFirstLoad = selectedGroups.size === 0 && selectedExtensions.size === 0;
-        // 收集当前 DOM 中所有的筛选值，用于检测“新出现的标签”
-        const currentGroupValues = new Set();
-        const currentExtValues = new Set();
-        container.querySelectorAll('.group-tag').forEach(tag => {
-            const ft = tag.getAttribute('data-filter-type');
-            if (ft === 'group') currentGroupValues.add(tag.getAttribute('data-group-value'));
-            else if (ft === 'extension') currentExtValues.add(tag.getAttribute('data-extension'));
-        });
-
-        if (isFirstLoad) {
-            container.querySelectorAll('.group-tag').forEach(tag => {
-                const filterType = tag.getAttribute('data-filter-type');
-                if (filterType === 'group') {
-                    selectedGroups.add(tag.getAttribute('data-group-value'));
-                } else if (filterType === 'extension') {
-                    selectedExtensions.add(tag.getAttribute('data-extension'));
+        // 首次加载时默认全选所有 changelist
+        const isFirstLoad = selectedGroups.size === 0;
+        checkboxes.forEach(cb => {
+            const value = cb.getAttribute('data-group-value');
+            if (isFirstLoad) {
+                if (!hiddenGroups.has(value)) {
+                    selectedGroups.add(value);
+                    cb.checked = true;
+                } else {
+                    cb.checked = false;
                 }
-                tag.classList.add('selected');
-            });
-            saveState();
-        } else {
-            // 非首次加载：对于 DOM 中新出现的标签默认选中
-            // 包括特殊分组（__changes__ / __unversioned__）和新建/新发现的 changelist
-            let mutated = false;
-            container.querySelectorAll('.group-tag[data-filter-type="group"]').forEach(tag => {
-                const val = tag.getAttribute('data-group-value');
-                if (!selectedGroups.has(val)) {
-                    selectedGroups.add(val);
-                    mutated = true;
+            } else {
+                // 非首次加载，检查新出现的分组默认选中
+                if (selectedGroups.has(value)) {
+                    cb.checked = true;
+                } else if (!hiddenGroups.has(value) && !selectedGroups.has(value)) {
+                    // 新出现的分组默认选中
+                    selectedGroups.add(value);
+                    cb.checked = true;
+                } else {
+                    cb.checked = false;
                 }
-            });
-            if (mutated) saveState();
-        }
-
-        // 标签点击事件
-        container.querySelectorAll('.group-tag').forEach(tag => {
-            const filterType = tag.getAttribute('data-filter-type');
-
-            // 恢复选中状态
-            if (filterType === 'group') {
-                const value = tag.getAttribute('data-group-value');
-                if (selectedGroups.has(value)) { tag.classList.add('selected'); }
-                else { tag.classList.remove('selected'); }
-            } else if (filterType === 'extension') {
-                const ext = tag.getAttribute('data-extension');
-                if (selectedExtensions.has(ext)) { tag.classList.add('selected'); }
-                else { tag.classList.remove('selected'); }
             }
 
-            tag.addEventListener('click', () => {
-                if (filterType === 'group') {
-                    const value = tag.getAttribute('data-group-value');
-                    if (selectedGroups.has(value)) {
-                        selectedGroups.delete(value);
-                        tag.classList.remove('selected');
-                    } else {
-                        selectedGroups.add(value);
-                        tag.classList.add('selected');
-                    }
-                } else if (filterType === 'extension') {
-                    const ext = tag.getAttribute('data-extension');
-                    if (selectedExtensions.has(ext)) {
-                        selectedExtensions.delete(ext);
-                        tag.classList.remove('selected');
-                    } else {
-                        selectedExtensions.add(ext);
-                        tag.classList.add('selected');
-                    }
+            cb.addEventListener('change', () => {
+                if (cb.checked) {
+                    selectedGroups.add(value);
+                    hiddenGroups.delete(value);
+                } else {
+                    selectedGroups.delete(value);
+                    hiddenGroups.add(value);
                 }
                 updateFileList();
                 saveState();
+                syncPersistentState();
             });
         });
-
-        // 全选按钮
-        const selectAllBtn = document.getElementById('selectAllGroups');
-        if (selectAllBtn) {
-            selectAllBtn.addEventListener('click', () => {
-                container.querySelectorAll('.group-tag').forEach(tag => {
-                    tag.classList.add('selected');
-                    const ft = tag.getAttribute('data-filter-type');
-                    if (ft === 'group') { selectedGroups.add(tag.getAttribute('data-group-value')); }
-                    else if (ft === 'extension') { selectedExtensions.add(tag.getAttribute('data-extension')); }
-                });
-                updateFileList();
-                saveState();
-            });
-        }
-
-        // 清空按钮
-        const clearAllBtn = document.getElementById('clearAllGroups');
-        if (clearAllBtn) {
-            clearAllBtn.addEventListener('click', () => {
-                container.querySelectorAll('.group-tag').forEach(tag => {
-                    tag.classList.remove('selected');
-                });
-                selectedGroups.clear();
-                selectedExtensions.clear();
-                updateFileList();
-                saveState();
-            });
-        }
+        if (isFirstLoad) saveState();
     }
+
 
     function updateFileList() {
         const fileItems = document.querySelectorAll('.file-item');
@@ -329,23 +278,21 @@
 
         fileItems.forEach(item => {
             const type = item.getAttribute('data-type');
-            const fileName = item.querySelector('.file-name').textContent;
-            const ext = fileName.includes('.') ?
-                '.' + fileName.split('.').pop().toLowerCase() :
-                '(无后缀)';
             const changelist = item.getAttribute('data-changelist') || '';
+            const filePath = item.getAttribute('data-path');
 
             const typeMatch = enabledTypes.has(type);
             const groupMatch = selectedGroups.has(changelist);
-            const extensionMatch = selectedExtensions.size === 0 || selectedExtensions.has(ext);
-            const lockedMatch = !lockedOnly || item.getAttribute('data-locked') === 'true';
 
-            if (typeMatch && groupMatch && extensionMatch && lockedMatch) {
+            if (typeMatch && groupMatch) {
                 item.style.display = '';
                 visibleCount++;
+                // 文件变为可见时，如果用户没有手动取消勾选，则恢复选中状态
+                if (!uncheckedFiles.has(filePath) && !selectedFiles.has(filePath)) {
+                    selectedFiles.add(filePath);
+                }
             } else {
                 item.style.display = 'none';
-                const filePath = item.getAttribute('data-path');
                 if (selectedFiles.has(filePath)) {
                     selectedFiles.delete(filePath);
                 }
@@ -364,8 +311,21 @@
             }
         });
 
+        updateCheckboxes();
         updateSelectAllCheckbox();
         updateGroupSelectAllCheckboxes();
+        updateFileCount();
+    }
+
+    function updateFileCount() {
+        const allFiles = document.querySelectorAll('.file-item');
+        const visibleFiles = Array.from(allFiles).filter(item => item.style.display !== 'none');
+        const checkedCount = visibleFiles.filter(item => selectedFiles.has(item.getAttribute('data-path'))).length;
+        const totalVisible = visibleFiles.length;
+        const el = document.getElementById('fileCountInfo');
+        if (el) {
+            el.textContent = `已选 ${checkedCount} / 共 ${totalVisible}`;
+        }
     }
 
     function updateCheckboxes() {
@@ -442,6 +402,7 @@
             files: selectedFilesList
         });
     }
+
 
     function generateAILog() {
         vscode.postMessage({ command: 'generateAILog' });
@@ -707,6 +668,25 @@
 
     // 页面加载完成后初始化
     document.addEventListener('DOMContentLoaded', () => {
+        // 启动时过滤掉 DOM 中已不存在的文件路径（防止删除文件后旧的 selectedFiles/uncheckedFiles
+        // 残留幽灵路径，导致提交时将不存在的文件传给 svn commit 报错）
+        const domPaths = new Set(
+            Array.from(document.querySelectorAll('.file-item'))
+                .map(item => item.getAttribute('data-path'))
+                .filter(Boolean)
+        );
+        let __purged = false;
+        Array.from(selectedFiles).forEach(p => {
+            if (!domPaths.has(p)) { selectedFiles.delete(p); __purged = true; }
+        });
+        Array.from(uncheckedFiles).forEach(p => {
+            if (!domPaths.has(p)) { uncheckedFiles.delete(p); __purged = true; }
+        });
+        if (__purged) {
+            saveState();
+            syncPersistentState();
+        }
+
         initializeEventListeners();
         initializeFileItemEvents();
         initializeGroupCollapse();
@@ -758,15 +738,19 @@
                     const checkbox = item.querySelector('.file-checkbox');
                     if (checked) {
                         selectedFiles.add(filePath);
+                        uncheckedFiles.delete(filePath);
                         if (checkbox) checkbox.checked = true;
                     } else {
                         selectedFiles.delete(filePath);
+                        uncheckedFiles.add(filePath);
                         if (checkbox) checkbox.checked = false;
                     }
                 });
 
                 updateSelectAllCheckbox();
+                updateFileCount();
                 saveState();
+                syncPersistentState();
             });
         });
     }

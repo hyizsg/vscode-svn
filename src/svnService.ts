@@ -54,6 +54,9 @@ export class SvnService {
   private _workingCopyPath: string | undefined;
   private authService: SvnAuthService | undefined;
 
+  /** 实时命令输出回调，外部可设置以接收 stdout/stderr 流式数据 */
+  public onCommandOutput?: (data: string) => void;
+
   constructor(context?: vscode.ExtensionContext) {
     this.outputChannel = vscode.window.createOutputChannel('SVN');
     this.filterService = new SvnFilterService();
@@ -438,6 +441,9 @@ export class SvnService {
         svnProcess.stdout.on('data', (data) => {
           const processedData = this.processCommandOutput(data.toString());
           this.outputChannel.appendLine(`[_executeCommand] 命令输出: ${processedData.replace(/\n/g, '\\n')}`);
+          if (this.onCommandOutput) {
+            this.onCommandOutput(processedData);
+          }
         });
       }
       
@@ -445,6 +451,9 @@ export class SvnService {
         svnProcess.stderr.on('data', (data) => {
           const processedData = this.processCommandOutput(data.toString());
           this.outputChannel.appendLine(`[_executeCommand] 错误输出: ${processedData.replace(/\n/g, '\\n')}`);
+          if (this.onCommandOutput) {
+            this.onCommandOutput(processedData);
+          }
         });
       }
     });
@@ -747,7 +756,21 @@ export class SvnService {
     }
     
     // 如果不是XML格式或无法解析XML，则使用原来的方式解析
-    const statusCode = statusResult.trim().charAt(0);
+    // 跳过 changelist 头行（格式如 "--- Changelist 'xxx':"）
+    const lines = statusResult.split('\n');
+    let statusLine = '';
+    for (const line of lines) {
+      const trimmed = line.trimEnd();
+      if (trimmed === '' || trimmed.startsWith('--- Changelist')) {
+        continue;
+      }
+      statusLine = trimmed;
+      break;
+    }
+    if (!statusLine) {
+      return '无修改';
+    }
+    const statusCode = statusLine.charAt(0);
     this.outputChannel.appendLine(`[parseStatusCode] 使用第一个字符作为状态码: ${statusCode}`);
     
     switch (statusCode) {
@@ -2807,6 +2830,58 @@ export class SvnService {
   }
 
   /**
+   * 获取冲突文件临时件路径 (base / mine / theirs)。
+   * 适用于合并后产生冲突的文本文件，用于 VS Code 三向合并编辑器。
+   */
+  public async getMergeConflictFiles(filePath: string): Promise<{ base?: string; mine?: string; theirs?: string }> {
+    const dir = path.dirname(filePath);
+    const fileName = path.basename(filePath);
+    const result: { base?: string; mine?: string; theirs?: string } = {};
+    try {
+      const escapedTarget = fileName.includes('@') ? `${fileName}@` : fileName;
+      const info = await this.executeSvnCommand(`info "${escapedTarget}"`, dir);
+      const pickField = (label: string): string | undefined => {
+        const re = new RegExp(`^${label}:\\s*(.+?)\\s*$`, 'mi');
+        const m = info.match(re);
+        if (!m) return undefined;
+        const raw = m[1].trim();
+        if (!raw) return undefined;
+        return path.isAbsolute(raw) ? raw : path.resolve(dir, raw);
+      };
+      const baseFile = pickField('Conflict Previous Base File');
+      const mineFile = pickField('Conflict Previous Working File');
+      const theirsFile = pickField('Conflict Current Base File');
+      if (baseFile && fs.existsSync(baseFile)) result.base = baseFile;
+      if (mineFile && fs.existsSync(mineFile)) result.mine = mineFile;
+      if (theirsFile && fs.existsSync(theirsFile)) result.theirs = theirsFile;
+      if (!result.mine) {
+        const candidate = `${filePath}.mine`;
+        if (fs.existsSync(candidate)) result.mine = candidate;
+      }
+      if (!result.theirs || !result.base) {
+        try {
+          const items = fs.readdirSync(dir);
+          const escFn = fileName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const reRev = new RegExp(`^${escFn}\\.r(\\d+)$`);
+          const revs: { rev: number; full: string }[] = [];
+          for (const it of items) {
+            const m = it.match(reRev);
+            if (m) revs.push({ rev: parseInt(m[1], 10), full: path.resolve(dir, it) });
+          }
+          if (revs.length > 0) {
+            revs.sort((a, b) => a.rev - b.rev);
+            if (!result.base) result.base = revs[0].full;
+            if (!result.theirs) result.theirs = revs[revs.length - 1].full;
+          }
+        } catch { /* 忽略 */ }
+      }
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getMergeConflictFiles] 获取临时文件失败: ${error.message}`);
+    }
+    return result;
+  }
+
+  /**
    * 标记合并冲突为已解决（与已有 resolveConflict 区分，支持更多 resolution 类型）
    */
   public async resolveMergeConflict(filePath: string, resolution: 'working' | 'theirs-full' | 'mine-full' = 'working'): Promise<void> {
@@ -2897,6 +2972,83 @@ export class SvnService {
   }
 
   // ===================== Export / Import =====================
+
+  /**
+   * SVN Export 单个文件到本地路径（二进制安全，不会被文本编码破坏）。
+   * 适用于图片/字体/压缩包等二进制文件版本调取。
+   * @param fileUrl 完整 SVN 文件 URL
+   * @param revision 目标版本号
+   * @param targetFilePath 导出目标本地文件路径
+   * @param cwd 执行命令的工作目录
+   */
+  public async exportFileToPath(fileUrl: string, revision: string, targetFilePath: string, cwd: string): Promise<void> {
+    // 确保目标目录存在
+    const dir = path.dirname(targetFilePath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    if (fs.existsSync(targetFilePath)) {
+      try { fs.unlinkSync(targetFilePath); } catch { /* ignore */ }
+    }
+
+    // 方案一：svn export 直接写文件（由 svn 客户端写入二进制，不过 utf8 解码）
+    let firstError: Error | null = null;
+    try {
+      const command = `export -r ${revision} --force "${fileUrl}@${revision}" "${targetFilePath}"`;
+      await this.executeSvnCommand(command, cwd);
+      if (fs.existsSync(targetFilePath) && fs.statSync(targetFilePath).size > 0) {
+        return;
+      }
+      firstError = new Error('svn export 后目标文件不存在或为空');
+    } catch (e: any) {
+      firstError = e instanceof Error ? e : new Error(String(e?.message || e));
+    }
+    this.outputChannel.appendLine(`[exportFileToPath] svn export 失败，回退到 svn cat 二进制流: ${firstError.message}`);
+
+    // 方案二：直接 spawn svn cat 拿原始 stdout Buffer 写入文件（绕过 utf8 解码）
+    try {
+      await this.catFileToPath(fileUrl, revision, targetFilePath, cwd);
+      if (fs.existsSync(targetFilePath) && fs.statSync(targetFilePath).size > 0) {
+        return;
+      }
+      throw new Error('svn cat 后目标文件不存在或为空');
+    } catch (e: any) {
+      const msg = (e instanceof Error ? e.message : String(e)) || '未知错误';
+      throw new Error(`导出文件版本失败 (r${revision}): export 错误=${firstError.message}；cat 错误=${msg}`);
+    }
+  }
+
+  /**
+   * 使用 spawn 直接调用 svn cat，将 stdout Buffer 写入文件（二进制安全）。
+   * 仅适用于不需要交互式认证的场景；SVN 认证依赖本地 缓存或全局默认。
+   */
+  public async catFileToPath(fileUrl: string, revision: string, targetFilePath: string, cwd: string): Promise<void> {
+    const env = this.getEnhancedEnvironment();
+    const args = ['cat', '-r', String(revision), '--non-interactive', '--trust-server-cert', `${fileUrl}@${revision}`];
+    return new Promise<void>((resolve, reject) => {
+      const proc = cp.spawn('svn', args, { cwd, env });
+      const chunks: Buffer[] = [];
+      const errChunks: Buffer[] = [];
+      proc.stdout.on('data', (c: Buffer) => chunks.push(c));
+      proc.stderr.on('data', (c: Buffer) => errChunks.push(c));
+      proc.on('error', (err) => reject(err));
+      proc.on('close', (code) => {
+        if (code === 0) {
+          try {
+            const buf = Buffer.concat(chunks);
+            const dir = path.dirname(targetFilePath);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+            fs.writeFileSync(targetFilePath, buf);
+            this.outputChannel.appendLine(`[catFileToPath] 写入 ${targetFilePath} (${buf.length} bytes)`);
+            resolve();
+          } catch (e) {
+            reject(e);
+          }
+        } else {
+          const msg = Buffer.concat(errChunks).toString('utf8') || `svn cat 退出码 ${code}`;
+          reject(new Error(msg.trim()));
+        }
+      });
+    });
+  }
 
   /**
    * SVN Export：导出干净的工作副本（不含 .svn 元数据）

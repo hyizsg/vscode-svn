@@ -6,6 +6,7 @@
     <link rel="stylesheet" href="{{STYLE_URI}}">
 </head>
 <body>
+    <script>window.__persistentState = {{PERSISTENT_STATE}};</script>
     <div class="filter-section">
         <div class="checkbox-group">
             <label>
@@ -28,22 +29,8 @@
                 <input type="checkbox" id="missing-checkbox" checked>
                 丢失
             </label>
-            <label style="margin-left:12px;border-left:1px solid var(--vscode-panel-border,#444);padding-left:12px;">
-                <input type="checkbox" id="lockedOnly-checkbox">
-                仅锁定
-            </label>
+            {{CHANGELIST_CHECKBOXES}}
         </div>
-        <div class="group-filter">
-            <label class="group-filter-label">分组筛选：</label>
-            <div class="group-tags-container" id="groupTagsContainer">
-                {{GROUP_FILTER_TAGS}}
-            </div>
-            <div class="group-actions">
-                <button class="group-action-btn" id="selectAllGroups">全选</button>
-                <button class="group-action-btn" id="clearAllGroups">清空</button>
-            </div>
-        </div>
-        {{FILTER_INFO}}
     </div>
 
     <div class="file-list-container">
@@ -52,7 +39,7 @@
                 <span class="checkbox-cell">
                     <input type="checkbox" id="selectAll">
                 </span>
-                <span>文件名</span>
+                <span>文件名 <span id="fileCountInfo" class="file-count-info">已选 0 / 共 0</span></span>
                 <span>路径</span>
                 <span class="file-status">状态</span>
                 <span class="file-action">操作</span>

@@ -5,6 +5,7 @@
     const branchSelect = document.getElementById('branchSelect');
     const refreshBtn = document.getElementById('refreshBranches');
     const manualUrl = document.getElementById('manualUrl');
+    const loadRevisionsBtn = document.getElementById('loadRevisionsBtn');
     const selectModeDiv = document.getElementById('selectMode');
     const manualModeDiv = document.getElementById('manualMode');
     const revisionPicker = document.getElementById('revisionPicker');
@@ -62,23 +63,17 @@
         });
     }
 
-    // 分支切换时加载版本日志
+    // 分支切换：仅记忆选择，不自动加载日志（需点击「加载版本日志」按钮）
     function setupBranchChangeHandler() {
         branchSelect.addEventListener('change', () => {
             const sourceUrl = branchSelect.value;
             if (sourceUrl) {
                 localStorage.setItem('svn-merge-last-branch', sourceUrl);
-                loadRevisionsForSource(sourceUrl);
-            } else {
-                clearRevisionList();
             }
+            clearRevisionList();
         });
-        // 手动输入时，失去焦点加载
-        manualUrl.addEventListener('blur', () => {
-            const url = (manualUrl.value || '').trim();
-            if (url) {
-                loadRevisionsForSource(url);
-            }
+        manualUrl.addEventListener('input', () => {
+            clearRevisionList();
         });
     }
 
@@ -93,7 +88,7 @@
     function clearRevisionList() {
         allRevisions = [];
         selectedRevisions.clear();
-        revisionListBody.innerHTML = '<div class="revision-empty">请先选择合并源分支</div>';
+        revisionListBody.innerHTML = '<div class="revision-empty">点击上方「🔄 加载版本日志」按钮开始加载</div>';
         revisionSummary.textContent = '';
     }
 
@@ -118,6 +113,14 @@
             branchSelect.innerHTML = '<option value="">-- 加载中... --</option>';
             vscode.postMessage({ command: 'listBranches' });
         });
+
+        if (loadRevisionsBtn) {
+            loadRevisionsBtn.addEventListener('click', () => {
+                const url = getSourceUrl();
+                if (!url) { setStatus('请先选择或输入合并源', 'error'); return; }
+                loadRevisionsForSource(url);
+            });
+        }
 
         dryRunBtn.addEventListener('click', () => {
             const sourceUrl = getSourceUrl();
@@ -418,14 +421,10 @@
         addGroup('Branches', groups.branch);
         addGroup('Tags', groups.tag);
 
-        // 恢复上次选择的分支
+        // 恢复上次选择的分支（仅恢复选项，不自动加载日志）
         const lastBranch = localStorage.getItem('svn-merge-last-branch') || '';
         if (lastBranch && branchSelect.querySelector(`option[value="${CSS.escape(lastBranch)}"]`)) {
             branchSelect.value = lastBranch;
-            // 自动加载版本
-            if (lastBranch) {
-                loadRevisionsForSource(lastBranch);
-            }
         }
     }
 

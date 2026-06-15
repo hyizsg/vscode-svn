@@ -9,6 +9,7 @@ import { SvnUpdatePanel } from './updatePanel';
 import { CommitLogStorage } from './commitLogStorage';
 import { SvnFolderCommitPanel } from './folderCommitPanel';
 import { SvnLogPanel } from './svnLogPanel';
+import { MergeToBranchPanel } from './mergeToBranchPanel';
 import { SvnFilterService } from './filterService';
 import { AiCacheService } from './aiCacheService';
 import { AiService } from './aiService';
@@ -26,6 +27,8 @@ let logStorage: CommitLogStorage;
 let filterService: SvnFilterService;
 // 扩展根 URI，webview 面板加载本地资源时使用
 let extensionRootUri: vscode.Uri;
+// 扩展上下文，用于状态持久化等
+let extensionContext: vscode.ExtensionContext;
 // blame 临时文件路径 -> 行级 blame 元数据索引，供点击监听器使用
 type BlameLineInfo = { rev: string; author: string; content: string };
 type BlameLogInfo = { author: string; date: string; msg: string };
@@ -128,7 +131,8 @@ async function uploadFolderToSvn(folderPath: string): Promise<void> {
       folderPath,
       svnService,
       diffProvider,
-      logStorage
+      logStorage,
+      extensionContext
     );
   } catch (error: any) {
     vscode.window.showErrorMessage('上传文件夹到SVN失败: ' + error.message);
@@ -938,10 +942,11 @@ async function svnCreatePatch(targetUri?: vscode.Uri): Promise<void> {
     }
     let workPath = targetUri?.fsPath;
     if (!workPath) {
-      if (vscode.window.activeTextEditor) {
-        workPath = vscode.window.activeTextEditor.document.uri.fsPath;
-      } else if (vscode.workspace.workspaceFolders?.length) {
+      // 优先工作区根目录，避免资源栏顶部菜单误拿当前打开的文件
+      if (vscode.workspace.workspaceFolders?.length) {
         workPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+      } else if (vscode.window.activeTextEditor) {
+        workPath = vscode.window.activeTextEditor.document.uri.fsPath;
       }
     }
     if (!workPath) {
@@ -1013,8 +1018,9 @@ async function svnManageProperties(targetUri?: vscode.Uri): Promise<void> {
     }
     let target = targetUri?.fsPath;
     if (!target) {
-      if (vscode.window.activeTextEditor) target = vscode.window.activeTextEditor.document.uri.fsPath;
-      else if (vscode.workspace.workspaceFolders?.length) target = vscode.workspace.workspaceFolders[0].uri.fsPath;
+      // 优先工作区根目录，避免资源栏顶部菜单误拿当前打开的文件
+      if (vscode.workspace.workspaceFolders?.length) target = vscode.workspace.workspaceFolders[0].uri.fsPath;
+      else if (vscode.window.activeTextEditor) target = vscode.window.activeTextEditor.document.uri.fsPath;
     }
     if (!target) { vscode.window.showErrorMessage('请选择文件或目录'); return; }
     if (!await svnService.isInWorkingCopy(target)) { vscode.window.showErrorMessage('不在SVN工作副本中'); return; }
@@ -2130,9 +2136,9 @@ async function svnUpdateToRevision(uri?: vscode.Uri): Promise<void> {
   let fsPath: string | undefined;
   if (uri) fsPath = uri.fsPath;
   else {
-    const activeEditor = vscode.window.activeTextEditor;
-    if (activeEditor) fsPath = activeEditor.document.uri.fsPath;
-    else if (vscode.workspace.workspaceFolders?.length) fsPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    // 优先工作区根目录，避免资源栏顶部菜单误拿当前打开的文件
+    if (vscode.workspace.workspaceFolders?.length) fsPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    else if (vscode.window.activeTextEditor) fsPath = vscode.window.activeTextEditor.document.uri.fsPath;
   }
   if (!fsPath) { vscode.window.showErrorMessage('请选择文件或目录'); return; }
   const revision = await vscode.window.showInputBox({
@@ -2331,9 +2337,9 @@ async function svnCopyUrl(uri?: vscode.Uri): Promise<void> {
   let fsPath: string | undefined;
   if (uri) fsPath = uri.fsPath;
   else {
-    const activeEditor = vscode.window.activeTextEditor;
-    if (activeEditor) fsPath = activeEditor.document.uri.fsPath;
-    else if (vscode.workspace.workspaceFolders?.length) fsPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    // 优先工作区根目录，避免资源栏顶部菜单误拿当前打开的文件
+    if (vscode.workspace.workspaceFolders?.length) fsPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
+    else if (vscode.window.activeTextEditor) fsPath = vscode.window.activeTextEditor.document.uri.fsPath;
   }
   if (!fsPath) { vscode.window.showErrorMessage('请选择文件或目录'); return; }
   try {
@@ -2512,6 +2518,9 @@ async function svnQuickSetFileProps(uri?: vscode.Uri): Promise<void> {
 export function activate(context: vscode.ExtensionContext) {
   console.log('VSCode SVN 扩展已激活');
   
+  // 保存扩展上下文
+  extensionContext = context;
+  
   // 初始化SVN服务
   svnService = new SvnService(context);
   diffProvider = new SvnDiffProvider(svnService);
@@ -2678,18 +2687,31 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showErrorMessage('没有打开的工作区');
       return;
     }
-    
-    // 使用第一个工作区文件夹
     const workspaceFolder = vscode.workspace.workspaceFolders[0];
-    
     if (workspaceFolder.uri.scheme !== 'file') {
       vscode.window.showErrorMessage('只能更新本地工作区');
       return;
     }
-    
     await updateDirectory(workspaceFolder.uri.fsPath);
   });
-  
+
+  // 注册“合并到其他分支”命令
+  const mergeToBranchCommand = vscode.commands.registerCommand('vscode-svn.mergeToBranch', async (folderUri?: vscode.Uri) => {
+    if (!folderUri) {
+      if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+        folderUri = vscode.workspace.workspaceFolders[0].uri;
+      } else {
+        vscode.window.showErrorMessage('请右键一个工作副本目录');
+        return;
+      }
+    }
+    if (folderUri.scheme !== 'file') {
+      vscode.window.showErrorMessage('只支持本地目录');
+      return;
+    }
+    MergeToBranchPanel.createOrShow(context, svnService, folderUri.fsPath);
+  });
+
   // 注册恢复文件命令
   const revertFileCommand = vscode.commands.registerCommand('vscode-svn.revertFile', async (fileUri?: vscode.Uri) => {
     if (!fileUri) {
@@ -2734,15 +2756,17 @@ export function activate(context: vscode.ExtensionContext) {
   // 注册查看SVN日志命令
   const viewLogCommand = vscode.commands.registerCommand('vscode-svn.viewLog', async (fileUri?: vscode.Uri) => {
     if (!fileUri) {
-      // 如果没有通过右键菜单选择文件，先尝试当前活动编辑器，再回退到工作区根目录
-      const activeEditor = vscode.window.activeTextEditor;
-      if (activeEditor) {
-        fileUri = activeEditor.document.uri;
-      } else if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
+      // 未传入 uri（资源栏顶部菜单 / 命令面板）时，优先使用工作区根目录，避免误拿到当前打开的文件
+      if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
         fileUri = vscode.workspace.workspaceFolders[0].uri;
       } else {
-        vscode.window.showErrorMessage('没有选择文件或文件夹');
-        return;
+        const activeEditor = vscode.window.activeTextEditor;
+        if (activeEditor) {
+          fileUri = activeEditor.document.uri;
+        } else {
+          vscode.window.showErrorMessage('没有选择文件或文件夹');
+          return;
+        }
       }
     }
     
@@ -3141,7 +3165,8 @@ export function activate(context: vscode.ExtensionContext) {
   // 中文别名命令：用于右键菜单展示中文标题，内部转发到原英文命令
   const zhAliasPairs: [string, string][] = [
     ['vscode-svn.updateDirectory',         'vscode-svn.updateDirectory.zh'],
-    ['vscode-svn.uploadFolder',            'vscode-svn.uploadFolder.zh'],
+        ['vscode-svn.uploadFolder',            'vscode-svn.uploadFolder.zh'],
+        ['vscode-svn.mergeToBranch',           'vscode-svn.mergeToBranch.zh'],
     ['vscode-svn.updateFile',              'vscode-svn.updateFile.zh'],
     ['vscode-svn.commitFile',              'vscode-svn.commitFile.zh'],
     ['vscode-svn.diff',                    'vscode-svn.diff.zh'],
@@ -3187,6 +3212,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     uploadFileCommand,
     uploadFolderCommand,
+    mergeToBranchCommand,
     commitFileCommand,
     setSvnRootCommand,
     clearSvnRootCommand,

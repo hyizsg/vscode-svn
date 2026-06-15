@@ -1037,7 +1037,33 @@ export class SvnLogPanel {
             // 如果成功构建了文件URL，尝试使用URL方式获取差异
             if (fileUrl) {
                 this._log(`尝试使用文件URL获取差异: ${fileUrl}`);
-                
+
+                // 图片/二进制文件特殊处理：使用 svn export 取二进制内容，并以并排预览方式打开
+                if (this._isImageFile(filePath)) {
+                    try {
+                        const tempDir = path.join(os.tmpdir(), 'vscode-svn-diff');
+                        if (!fs.existsSync(tempDir)) { fs.mkdirSync(tempDir, { recursive: true }); }
+                        const fileName = path.basename(filePath);
+                        const ext = path.extname(fileName);
+                        const baseName = path.basename(fileName, ext);
+                        const prevFilePath = path.join(tempDir, `${baseName}.r${prevRevision}${ext}`);
+                        const currentFilePath = path.join(tempDir, `${baseName}.r${revision}${ext}`);
+
+                        this._log(`检测到图片文件，使用 svn export 导出二进制版本: ${prevFilePath} 与 ${currentFilePath}`);
+                        await this.svnService.exportFileToPath(fileUrl, String(prevRevision), prevFilePath, workingDir);
+                        await this.svnService.exportFileToPath(fileUrl, revision, currentFilePath, workingDir);
+
+                        this._openImageDiffPanel(prevFilePath, currentFilePath, fileName, String(prevRevision), revision);
+                        this._panel.webview.postMessage({ command: 'setLoading', value: false });
+                        return;
+                    } catch (imgError: any) {
+                        this._log(`图片差异打开失败: ${imgError.message}`);
+                        vscode.window.showErrorMessage(`图片版本差异打开失败: ${imgError.message}`);
+                        this._panel.webview.postMessage({ command: 'setLoading', value: false });
+                        return;
+                    }
+                }
+
                 try {
                     // 创建临时文件来存储两个版本的内容
                     const tempDir = path.join(os.tmpdir(), 'vscode-svn-diff');
@@ -3725,19 +3751,12 @@ export class SvnLogPanel {
             const tempDir = path.join(os.tmpdir(), 'vscode-svn-diff');
             if (!fs.existsSync(tempDir)) { fs.mkdirSync(tempDir, { recursive: true }); }
 
-            // 获取指定版本的文件内容
-            const revContent = await this.svnService.executeSvnCommand(`cat "${fileUrl}@${revision}"`, workingDir, false);
-            const revFilePath = path.join(tempDir, `${fileName}.r${revision}`);
-            fs.writeFileSync(revFilePath, revContent);
-
             // 确定本地文件路径
             let localFilePath = '';
             if (repoRoot && repoUrl) {
                 const repoRelative = repoUrl.replace(repoRoot, '');
-                // 尝试从目标路径推导本地路径
                 const isDir = fs.lstatSync(this._targetPath).isDirectory();
                 if (isDir) {
-                    // 从 svnFilePath 中去掉 repoRelative 前缀得到相对路径
                     let relPath = svnFilePath;
                     if (repoRelative && svnFilePath.startsWith(repoRelative)) {
                         relPath = svnFilePath.substring(repoRelative.length);
@@ -3747,6 +3766,28 @@ export class SvnLogPanel {
                     localFilePath = this._targetPath;
                 }
             }
+
+            // 图片类文件：使用 svn export 二进制导出，并并排预览
+            if (this._isImageFile(svnFilePath)) {
+                const ext = path.extname(fileName);
+                const baseName = path.basename(fileName, ext);
+                const revFilePath = path.join(tempDir, `${baseName}.r${revision}${ext}`);
+                await this.svnService.exportFileToPath(fileUrl, revision, revFilePath, workingDir);
+
+                if (localFilePath && fs.existsSync(localFilePath)) {
+                    this._openImageDiffPanel(revFilePath, localFilePath, fileName, revision, '工作副本');
+                } else {
+                    // 本地不存在，退而单独预览该版本
+                    await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(revFilePath));
+                    vscode.window.showWarningMessage('未找到本地文件，仅预览历史版本。');
+                }
+                return;
+            }
+
+            // 获取指定版本的文件内容
+            const revContent = await this.svnService.executeSvnCommand(`cat "${fileUrl}@${revision}"`, workingDir, false);
+            const revFilePath = path.join(tempDir, `${fileName}.r${revision}`);
+            fs.writeFileSync(revFilePath, revContent);
 
             if (localFilePath && fs.existsSync(localFilePath)) {
                 await vscode.commands.executeCommand(
@@ -3895,5 +3936,167 @@ export class SvnLogPanel {
         }
 
         return false;
+    }
+
+    /**
+     * 判断是否为图片文件（根据扩展名）
+     */
+    private _isImageFile(filePath: string): boolean {
+        const ext = path.extname(filePath).toLowerCase();
+        return ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.ico', '.tiff', '.tif', '.tga', '.svg'].includes(ext);
+    }
+
+    /**
+     * 打开图片并排差异预览面板。
+     * 避免 VSCode 原生 diff 编辑器在二进制文件上提示“无法在文本编辑器中显示”。
+     */
+    private _openImageDiffPanel(
+        leftPath: string,
+        rightPath: string,
+        fileName: string,
+        leftLabel: string,
+        rightLabel: string
+    ): void {
+        const panel = vscode.window.createWebviewPanel(
+            'svnImageDiff',
+            `${fileName} (${leftLabel} vs ${rightLabel})`,
+            vscode.ViewColumn.Active,
+            {
+                enableScripts: true,
+                retainContextWhenHidden: true,
+                localResourceRoots: [
+                    vscode.Uri.file(path.dirname(leftPath)),
+                    vscode.Uri.file(path.dirname(rightPath))
+                ]
+            }
+        );
+
+        const leftUri = panel.webview.asWebviewUri(vscode.Uri.file(leftPath));
+        const rightUri = panel.webview.asWebviewUri(vscode.Uri.file(rightPath));
+        const leftSize = this._formatFileSize(this._safeFileSize(leftPath));
+        const rightSize = this._formatFileSize(this._safeFileSize(rightPath));
+
+        const nonce = Math.random().toString(36).slice(2);
+        panel.webview.html = `<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${panel.webview.cspSource} https: data:; style-src ${panel.webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<title>${this._escapeHtml(fileName)}</title>
+<style>
+  body { margin: 0; padding: 0; font-family: var(--vscode-font-family); color: var(--vscode-foreground); background: var(--vscode-editor-background); }
+  .toolbar { display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: var(--vscode-editorGroupHeader-tabsBackground); border-bottom: 1px solid var(--vscode-editorGroup-border); flex-wrap: wrap; }
+  .toolbar label { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; }
+  .toolbar input[type=range] { width: 140px; }
+  .toolbar button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: none; padding: 4px 10px; border-radius: 3px; cursor: pointer; font-size: 12px; }
+  .toolbar button:hover { background: var(--vscode-button-hoverBackground); }
+  .container { display: flex; height: calc(100vh - 46px); }
+  .pane { flex: 1; display: flex; flex-direction: column; min-width: 0; border-right: 1px solid var(--vscode-editorGroup-border); }
+  .pane:last-child { border-right: none; }
+  .pane-header { padding: 6px 10px; font-size: 12px; background: var(--vscode-tab-inactiveBackground); border-bottom: 1px solid var(--vscode-editorGroup-border); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .pane-header .meta { color: var(--vscode-descriptionForeground); font-size: 11px; }
+  .pane-body { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center; background: var(--vscode-editor-background); position: relative; }
+  .pane-body.checker { background-image: linear-gradient(45deg, rgba(128,128,128,0.15) 25%, transparent 25%), linear-gradient(-45deg, rgba(128,128,128,0.15) 25%, transparent 25%), linear-gradient(45deg, transparent 75%, rgba(128,128,128,0.15) 75%), linear-gradient(-45deg, transparent 75%, rgba(128,128,128,0.15) 75%); background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0; }
+  .pane-body img { display: block; max-width: none; max-height: none; image-rendering: pixelated; }
+  .pane-body.fit img { max-width: 100%; max-height: 100%; image-rendering: auto; }
+  .empty { color: var(--vscode-descriptionForeground); font-size: 12px; padding: 20px; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <label>缩放 <input id="zoom" type="range" min="10" max="400" step="5" value="100"> <span id="zoomVal">100%</span></label>
+    <button id="fitBtn">适应窗口</button>
+    <button id="resetBtn">原始尺寸</button>
+    <label><input id="checker" type="checkbox" checked> 棋盘背景</label>
+    <label><input id="sync" type="checkbox" checked> 同步滚动</label>
+  </div>
+  <div class="container">
+    <div class="pane">
+      <div class="pane-header"><span>${this._escapeHtml(leftLabel)}</span><span class="meta">${leftSize}</span></div>
+      <div class="pane-body checker" id="leftBody"><img id="leftImg" src="${leftUri}" alt="left"></div>
+    </div>
+    <div class="pane">
+      <div class="pane-header"><span>${this._escapeHtml(rightLabel)}</span><span class="meta">${rightSize}</span></div>
+      <div class="pane-body checker" id="rightBody"><img id="rightImg" src="${rightUri}" alt="right"></div>
+    </div>
+  </div>
+<script nonce="${nonce}">
+  const zoom = document.getElementById('zoom');
+  const zoomVal = document.getElementById('zoomVal');
+  const fitBtn = document.getElementById('fitBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const checker = document.getElementById('checker');
+  const sync = document.getElementById('sync');
+  const leftImg = document.getElementById('leftImg');
+  const rightImg = document.getElementById('rightImg');
+  const leftBody = document.getElementById('leftBody');
+  const rightBody = document.getElementById('rightBody');
+
+  function applyZoom(v) {
+    leftBody.classList.remove('fit');
+    rightBody.classList.remove('fit');
+    [leftImg, rightImg].forEach(img => {
+      if (img.naturalWidth) {
+        img.style.width = (img.naturalWidth * v / 100) + 'px';
+        img.style.height = 'auto';
+      }
+    });
+    zoomVal.textContent = v + '%';
+  }
+  zoom.addEventListener('input', e => applyZoom(parseInt(e.target.value, 10)));
+  fitBtn.addEventListener('click', () => {
+    leftBody.classList.add('fit');
+    rightBody.classList.add('fit');
+    [leftImg, rightImg].forEach(img => { img.style.width = ''; img.style.height = ''; });
+    zoomVal.textContent = '适应';
+  });
+  resetBtn.addEventListener('click', () => { zoom.value = 100; applyZoom(100); });
+  checker.addEventListener('change', () => {
+    leftBody.classList.toggle('checker', checker.checked);
+    rightBody.classList.toggle('checker', checker.checked);
+  });
+
+  let syncing = false;
+  function bindSync(a, b) {
+    a.addEventListener('scroll', () => {
+      if (!sync.checked || syncing) return;
+      syncing = true;
+      b.scrollTop = a.scrollTop;
+      b.scrollLeft = a.scrollLeft;
+      requestAnimationFrame(() => syncing = false);
+    });
+  }
+  bindSync(leftBody, rightBody);
+  bindSync(rightBody, leftBody);
+
+  let loaded = 0;
+  [leftImg, rightImg].forEach(img => {
+    img.addEventListener('load', () => {
+      loaded++;
+      if (loaded >= 2) { fitBtn.click(); }
+    });
+    img.addEventListener('error', () => {
+      img.replaceWith(Object.assign(document.createElement('div'), { className: 'empty', textContent: '无法加载图片' }));
+    });
+  });
+</script>
+</body>
+</html>`;
+    }
+
+    private _safeFileSize(filePath: string): number {
+        try { return fs.statSync(filePath).size; } catch { return 0; }
+    }
+
+    private _formatFileSize(bytes: number): string {
+        if (!bytes) { return '0 B'; }
+        const k = 1024;
+        const units = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(k)));
+        return `${(bytes / Math.pow(k, i)).toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
+    }
+
+    private _escapeHtml(s: string): string {
+        return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
     }
 }

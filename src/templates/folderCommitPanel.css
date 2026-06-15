@@ -18,22 +18,46 @@ body {
 .filter-section label {
     margin-right: 15px;
     user-select: none;
+    font-size: 12px;
+    transition: opacity 0.2s ease;
+}
+
+.filter-section label:has(input:not(:checked)) {
+    opacity: 0.45;
+}
+
+.filter-section label:has(input:checked) {
+    opacity: 1;
+}
+
+/* 状态类型过滤标签配色 */
+.filter-section label:has(#modified-checkbox) {
+    color: #FFCC00;
+}
+.filter-section label:has(#added-checkbox) {
+    color: #73C991;
+}
+.filter-section label:has(#deleted-checkbox) {
+    color: #F14C4C;
+}
+.filter-section label:has(#unversioned-checkbox) {
+    color: #C586C0;
+}
+.filter-section label:has(#missing-checkbox) {
+    color: #FF8800;
+}
+
+/* Changelist 过滤复选框 */
+.filter-section label:has(.changelist-filter-checkbox) {
+    color: var(--vscode-foreground);
 }
 
 .filter-info {
-    margin-top: 8px;
-    padding: 4px 8px;
-    background-color: var(--vscode-editor-background);
-    border: 1px solid var(--vscode-panel-border);
-    border-radius: 3px;
-    font-size: 12px;
-    color: var(--vscode-descriptionForeground);
+    display: none;
 }
 
 .filter-info.has-excluded {
-    background-color: var(--vscode-inputValidation-warningBackground);
-    border-color: var(--vscode-inputValidation-warningBorder);
-    color: var(--vscode-inputValidation-warningForeground);
+    display: none;
 }
 
 /* Unversioned 文件删除按钮：与 .revert-button 样式一致 */
@@ -124,8 +148,8 @@ body {
 }
 
 .file-item.selected {
-    background-color: var(--vscode-list-activeSelectionBackground);
-    color: var(--vscode-list-activeSelectionForeground);
+    background-color: var(--vscode-list-inactiveSelectionBackground, rgba(37, 37, 38, 0.8));
+    color: var(--vscode-list-inactiveSelectionForeground, inherit);
 }
 
 .file-name, .file-path {
@@ -258,91 +282,51 @@ textarea {
 }
 
 .group-filter {
-    margin-top: 10px;
+    display: none;
 }
 
 .group-filter-label {
-    display: block;
-    margin-bottom: 8px;
-    font-size: 12px;
-    color: var(--vscode-foreground);
-    font-weight: 500;
+    display: none;
 }
 
 .group-tags-container {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin-bottom: 8px;
-    min-height: 32px;
-    padding: 4px;
-    border: 1px solid var(--vscode-input-border);
-    border-radius: 4px;
-    background-color: var(--vscode-input-background);
+    display: none;
 }
 
 .group-tag {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 8px;
-    border-radius: 12px;
-    font-size: 11px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    user-select: none;
-    border: 1px solid var(--vscode-button-border);
-    background-color: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
+    display: none;
 }
 
 .group-tag:hover {
-    background-color: var(--vscode-button-secondaryHoverBackground);
-    transform: translateY(-1px);
+    display: none;
 }
 
 .group-tag.selected {
-    background-color: var(--vscode-button-background);
-    color: var(--vscode-button-foreground);
-    border-color: var(--vscode-focusBorder);
-    box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+    display: none;
 }
 
 .group-tag .file-count {
-    margin-left: 4px;
-    opacity: 0.7;
-    font-size: 10px;
+    display: none;
 }
 
 .group-tag.extension-tag {
-    background-color: var(--vscode-editorWidget-background);
-    border-style: dashed;
+    display: none;
 }
 
 .group-tag.extension-tag.selected {
-    background-color: var(--vscode-button-background);
-    border-style: solid;
+    display: none;
 }
 
 .group-actions {
-    display: flex;
-    gap: 6px;
-    justify-content: flex-end;
+    display: none;
 }
 
 .group-action-btn {
-    padding: 2px 8px;
-    font-size: 11px;
-    border-radius: 3px;
-    background-color: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
-    border: 1px solid var(--vscode-button-border);
-    cursor: pointer;
-    transition: background-color 0.2s ease;
+    display: none;
 }
 
 .group-action-btn:hover {
-    background-color: var(--vscode-button-secondaryHoverBackground);
+    display: none;
 }
 
 /* Changelist 分组样式 */
@@ -357,8 +341,8 @@ textarea {
 
 /* 行选择高亮（不影响提交勾选） */
 .file-item.active {
-    background-color: var(--vscode-list-activeSelectionBackground, rgba(38, 79, 120, 0.6)) !important;
-    color: var(--vscode-list-activeSelectionForeground, inherit);
+    background-color: var(--vscode-list-activeSelectionBackground, rgba(4, 57, 94, 0.7)) !important;
+    color: var(--vscode-list-activeSelectionForeground, #ffffff);
 }
 
 /* 右键上下文菜单 */
@@ -486,4 +470,12 @@ textarea {
 
 #extensionFilter {
     display: none;
+}
+
+
+.file-count-info {
+    font-size: 11px;
+    font-weight: normal;
+    color: var(--vscode-descriptionForeground, #888);
+    margin-left: 8px;
 } 
