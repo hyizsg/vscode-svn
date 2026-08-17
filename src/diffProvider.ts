@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as cp from 'child_process';
 import { SvnService } from './svnService';
 
 /**
@@ -460,11 +461,18 @@ export class SvnDiffProvider {
         this.outputChannel.appendLine(`[showDiff] 获取 SVN 版本内容...`);
         const cwd = path.dirname(filePath);
         const fileName = path.basename(filePath);
-        const baseContent = await this.svnService.executeSvnCommand(`cat "${fileName}"`, cwd);
+
+        if (this._isImageFile(filePath)) {
+          // 图片文件：使用二进制安全方式获取 BASE 版本
+          this.outputChannel.appendLine(`[showDiff] 检测到图片文件，使用二进制安全导出`);
+          await this._catFileBinaryToPath(cwd, fileName, tempFilePath);
+        } else {
+          const baseContent = await this.svnService.executeSvnCommand(`cat "${fileName}"`, cwd);
+          fs.writeFileSync(tempFilePath, baseContent);
+        }
         
-        // 写入 SVN 版本内容到临时文件
-        this.outputChannel.appendLine(`[showDiff] 写入 SVN 版本内容到临时文件: ${tempFilePath}`);
-        fs.writeFileSync(tempFilePath, baseContent);
+        // 写入完成
+        this.outputChannel.appendLine(`[showDiff] SVN 版本内容已写入临时文件: ${tempFilePath}`);
         
         // 创建临时文件的 URI
         const baseUri = vscode.Uri.file(tempFilePath);
@@ -490,5 +498,43 @@ export class SvnDiffProvider {
       vscode.window.showErrorMessage(`显示差异失败: ${error.message}`);
       return false;
     }
+  }
+
+  /**
+   * 判断文件是否为图片文件
+   */
+  private _isImageFile(filePath: string): boolean {
+    const ext = path.extname(filePath).toLowerCase();
+    return ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.ico', '.tiff', '.tif', '.tga', '.svg'].includes(ext);
+  }
+
+  /**
+   * 使用 spawn svn cat 二进制安全地将工作副本文件的 BASE 版本写入目标路径
+   */
+  private _catFileBinaryToPath(cwd: string, fileName: string, targetPath: string): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const proc = cp.spawn('svn', ['cat', fileName], { cwd });
+      const chunks: Buffer[] = [];
+      const errChunks: Buffer[] = [];
+      proc.stdout.on('data', (c: Buffer) => chunks.push(c));
+      proc.stderr.on('data', (c: Buffer) => errChunks.push(c));
+      proc.on('error', (err) => reject(err));
+      proc.on('close', (code) => {
+        if (code === 0) {
+          try {
+            const buf = Buffer.concat(chunks);
+            const fs = require('fs');
+            fs.writeFileSync(targetPath, buf);
+            this.outputChannel.appendLine(`[_catFileBinaryToPath] 写入 ${targetPath} (${buf.length} bytes)`);
+            resolve();
+          } catch (e: any) {
+            reject(e);
+          }
+        } else {
+          const errMsg = Buffer.concat(errChunks).toString('utf8').trim() || `svn cat 退出码 ${code}`;
+          reject(new Error(errMsg));
+        }
+      });
+    });
   }
 } 

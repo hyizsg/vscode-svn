@@ -34,6 +34,10 @@ export class SvnFolderCommitPanel {
     private readonly filterService: SvnFilterService;
     private readonly templateManager: TemplateManager;
     private _filterStats: { totalFiles: number, filteredFiles: number, excludedFiles: number } = { totalFiles: 0, filteredFiles: 0, excludedFiles: 0 };
+    // 待预填的默认提交日志（如由合并面板传入），等 webview 就绪后下发
+    private _pendingCommitMessage?: string;
+    // 用户当前编辑的提交信息（随前端输入同步），用于 webview 重载时保留，避免回退成历史日志
+    private _currentCommitMessage?: string;
 
     // --- 持久化状态读写 ---
     private _getPersistentStateKey(): string {
@@ -86,7 +90,8 @@ export class SvnFolderCommitPanel {
         svnService: SvnService,
         diffProvider: SvnDiffProvider,
         logStorage: CommitLogStorage,
-        context: vscode.ExtensionContext
+        context: vscode.ExtensionContext,
+        defaultMessage?: string
     ) {
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
@@ -102,6 +107,10 @@ export class SvnFolderCommitPanel {
             } else {
                 // 相同路径，直接显示现有面板（不指定 column，避免拉回主窗口）
                 SvnFolderCommitPanel.currentPanel._panel.reveal(undefined, true);
+                // 若有默认日志，直接下发（webview 已就绪）
+                if (defaultMessage && defaultMessage.trim()) {
+                    SvnFolderCommitPanel.currentPanel._panel.webview.postMessage({ command: 'setCommitMessage', message: defaultMessage });
+                }
                 return;
             }
         }
@@ -143,6 +152,9 @@ export class SvnFolderCommitPanel {
             logStorage,
             context
         );
+        if (defaultMessage && defaultMessage.trim()) {
+            SvnFolderCommitPanel.currentPanel._pendingCommitMessage = defaultMessage;
+        }
     }
 
     private async _update() {
@@ -603,23 +615,12 @@ export class SvnFolderCommitPanel {
 
             const directories = fileEntries.filter(entry => entry.isDirectory).map(entry => entry.path);
 
-            // 检测是否所有选中文件都在同一个 changelist 中
-            const selectedChangelists = new Set<string | undefined>();
-            files.forEach(file => {
-                const fileStatus = this._fileStatuses.find(f => f.path === file);
-                selectedChangelists.add(fileStatus?.changelist);
-            });
-            const uniqueChangelists = Array.from(selectedChangelists);
-            const allInSameChangelist = uniqueChangelists.length === 1 && uniqueChangelists[0] !== undefined;
-
             // 执行提交
+            // 注意：此处必须按勾选的文件路径逐个提交，不能因为“所有勾选文件恰好在同一个 changelist”
+            // 而改用 svn commit --changelist：--changelist 会提交该 changelist 下的全部文件，
+            // 导致用户未勾选的文件也被一并提交（且会绕过过滤器）。
             appendOutput(`正在执行 SVN 提交...\n`);
-            if (allInSameChangelist) {
-                const changelistName = uniqueChangelists[0]!;
-                await this.svnService.commitChangelist(this.folderPath, changelistName, message);
-            } else {
-                await this.svnService.commitFiles(files, message, this.folderPath);
-            }
+            await this.svnService.commitFiles(files, message, this.folderPath);
 
             // 保存提交日志
             this.logStorage.addLog(message, this.folderPath);
@@ -721,6 +722,17 @@ export class SvnFolderCommitPanel {
         this._panel.webview.onDidReceiveMessage(
             async (message) => {
                 switch (message.command) {
+                    case 'webviewReady':
+                        // webview 就绪，如有待预填的默认提交日志则下发
+                        if (this._pendingCommitMessage && this._pendingCommitMessage.trim()) {
+                            this._panel.webview.postMessage({ command: 'setCommitMessage', message: this._pendingCommitMessage });
+                            this._pendingCommitMessage = undefined;
+                        }
+                        return;
+                    case 'commitMessageChanged':
+                        // 同步用户当前编辑的提交信息，以便 webview 重载时保留
+                        this._currentCommitMessage = typeof message.message === 'string' ? message.message : '';
+                        return;
                     case 'commit':
                         await this._commitFiles(message.files, message.message);
                         return;
@@ -787,6 +799,9 @@ export class SvnFolderCommitPanel {
                         return;
                     case 'deleteUnversionedFiles':
                         await this._deleteUnversionedFiles(message.files);
+                        return;
+                    case 'deleteFromSvn':
+                        await this._deleteFromSvn(message.files || []);
                         return;
                     case 'moveToChangelist':
                         await this._moveFilesToChangelist(message.files, message.targetChangelist);
@@ -907,6 +922,62 @@ export class SvnFolderCommitPanel {
         }
 
         // 直接重绘 webview，不重新执行 svn status
+        this._panel.webview.html = await this._getHtmlForWebview();
+    }
+
+    /**
+     * 从版本控制中删除文件（svn delete），主要用于“丢失”文件：
+     * 删除会被记录为待提交的 D 状态，提交后版本库中同步删除
+     */
+    private async _deleteFromSvn(files: string[]): Promise<void> {
+        if (!files || files.length === 0) {
+            return;
+        }
+
+        // 只处理仍在列表中、已纳入版本控制且尚未标记删除的文件
+        const pathSet = new Set(files);
+        const targets = this._fileStatuses.filter(f =>
+            pathSet.has(f.path) && f.type !== 'unversioned' && f.type !== 'deleted'
+        );
+        if (targets.length === 0) {
+            vscode.window.showWarningMessage('选中的文件中没有可从 SVN 删除的文件');
+            return;
+        }
+
+        const preview = targets.slice(0, 5).map(f => `  • ${f.displayName}`).join('\n');
+        const more = targets.length > 5 ? `\n  …还有 ${targets.length - 5} 个` : '';
+        const confirm = await vscode.window.showWarningMessage(
+            `确认从 SVN 删除以下 ${targets.length} 个文件？`,
+            { modal: true, detail: `删除会标记为待提交，提交后在版本库中生效。\n\n${preview}${more}` },
+            '从 SVN 删除'
+        );
+        if (confirm !== '从 SVN 删除') {
+            return;
+        }
+
+        try {
+            await this.svnService.deleteFiles(targets.map(f => f.path));
+            vscode.window.showInformationMessage(`已将 ${targets.length} 个文件标记为删除，提交后生效`);
+        } catch (err: any) {
+            vscode.window.showErrorMessage(`从 SVN 删除失败: ${err.message}`);
+            this.outputChannel.show(true);
+            return;
+        }
+
+        // 乐观更新：丢失/已修改 → 已删除（D），保留在列表中以便提交
+        const targetSet = new Set(targets.map(f => f.path));
+        this._fileStatuses = this._fileStatuses.map(fsEntry => {
+            if (!targetSet.has(fsEntry.path)) {
+                return fsEntry;
+            }
+            return {
+                ...fsEntry,
+                type: 'deleted' as const,
+                status: this._getStatusText('D')
+            };
+        });
+
+        // 直接重绘 webview
         this._panel.webview.html = await this._getHtmlForWebview();
     }
 
@@ -1097,7 +1168,7 @@ export class SvnFolderCommitPanel {
                 CHANGELIST_CHECKBOXES: this._renderChangelistCheckboxes(this._fileStatuses),
                 FILE_LIST: this._renderFileList(this._fileStatuses),
                 PREFIX_OPTIONS: this._renderHistoryOptions(),
-                LAST_COMMIT_MESSAGE: this._getLastCommitMessage()
+                LAST_COMMIT_MESSAGE: this._getCommitMessageForHtml()
             };
 
             // 使用内联模板（CSS 和 JS 内嵌在 HTML 中）
@@ -1176,7 +1247,15 @@ export class SvnFolderCommitPanel {
 
     private _renderGroup(groupType: 'changelist' | 'changes' | 'unversioned', title: string, files: FileStatus[]): string {
         const groupChangelist = groupType === 'changelist' ? title : (groupType === 'changes' ? '__changes__' : '__unversioned__');
-        const groupHtml = files.map(file => this._renderFileItem(file, groupChangelist)).join('');
+        // 按文件名（basename）排序显示，而非按完整路径排序
+        const sortedFiles = [...files].sort((a, b) => {
+            const na = path.basename(a.displayName).toLowerCase();
+            const nb = path.basename(b.displayName).toLowerCase();
+            const cmp = na.localeCompare(nb);
+            // 文件名相同时再按所在目录路径排序，保证稳定
+            return cmp !== 0 ? cmp : path.dirname(a.displayName).toLowerCase().localeCompare(path.dirname(b.displayName).toLowerCase());
+        });
+        const groupHtml = sortedFiles.map(file => this._renderFileItem(file, groupChangelist)).join('');
 
         let icon = '📁';
         let cssClass = 'changelist-group';
@@ -1329,6 +1408,17 @@ export class SvnFolderCommitPanel {
             return logs[0].message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
         return '';
+    }
+
+    /**
+     * webview 重载时用于填充提交信息框的内容：
+     * 优先使用用户当前编辑的内容（避免 revert 等重绘时丢失），否则回退到上次提交日志
+     */
+    private _getCommitMessageForHtml(): string {
+        if (this._currentCommitMessage !== undefined) {
+            return this._currentCommitMessage.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+        return this._getLastCommitMessage();
     }
 
     private _getHtmlForDiffView(filePath: string, diff: string): string {

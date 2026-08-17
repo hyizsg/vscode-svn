@@ -15,11 +15,20 @@ export class SvnMergePanel {
     private readonly folderPath: string;
     private readonly outputChannel: vscode.OutputChannel;
     private readonly logStorage: CommitLogStorage;
+    private readonly _context: vscode.ExtensionContext;
     private _disposables: vscode.Disposable[] = [];
 
     // 面板状态
     private _repoRootUrl: string = '';
     private _workingCopyUrl: string = '';
+
+    // “加载更多日志”分页状态
+    private _mergedRevs: Set<number> = new Set();
+    private _eligibleRevs: Set<number> = new Set();
+    private _currentSourceUrl: string = '';
+    private _oldestLoadedRev: number = 0;
+    private _noMoreLogs: boolean = false;
+    private readonly _pageSize: number = 200;
 
     public static show(
         context: vscode.ExtensionContext,
@@ -62,6 +71,7 @@ export class SvnMergePanel {
         logStorage: CommitLogStorage
     ) {
         this._panel = panel;
+        this._context = context;
         this.svnService = svnService;
         this.folderPath = folderPath;
         this.logStorage = logStorage;
@@ -113,6 +123,9 @@ export class SvnMergePanel {
                     case 'loadRevisions':
                         await this._handleLoadRevisions(message);
                         return;
+                    case 'loadMoreRevisions':
+                        await this._handleLoadMoreRevisions();
+                        return;
                     case 'merge':
                         await this._handleMerge(message);
                         return;
@@ -129,11 +142,34 @@ export class SvnMergePanel {
                         vscode.commands.executeCommand('vscode-svn.uploadFolder',
                             vscode.Uri.file(this.folderPath));
                         return;
+                    case 'saveFilterState':
+                        this._handleSaveFilterState(message);
+                        return;
+                    case 'getFilterState':
+                        this._handleGetFilterState();
+                        return;
                 }
             },
             null,
             this._disposables
         );
+    }
+
+    private _handleSaveFilterState(message: any): void {
+        const state = {
+            filterText: message.filterText || '',
+            hideMerged: !!message.hideMerged
+        };
+        this._context.workspaceState.update('mergePanel.filterState', state);
+    }
+
+    private _handleGetFilterState(): void {
+        const state = this._context.workspaceState.get<{ filterText: string; hideMerged: boolean }>('mergePanel.filterState');
+        this._panel.webview.postMessage({
+            command: 'restoreFilterState',
+            filterText: state?.filterText || '',
+            hideMerged: state?.hideMerged ?? false
+        });
     }
 
     /**
@@ -216,12 +252,23 @@ export class SvnMergePanel {
         try {
             this._panel.webview.postMessage({ command: 'revisionsLoading' });
 
-            // 并行获取：日志、已合并版本、可合并版本
+            // 重置分页状态
+            this._mergedRevs = new Set();
+            this._eligibleRevs = new Set();
+            this._currentSourceUrl = sourceUrl;
+            this._oldestLoadedRev = 0;
+            this._noMoreLogs = false;
+
+            // 并行获取：首屏日志、已合并版本、可合并版本
             const [logEntries, mergedRevs, eligibleRevs] = await Promise.all([
-                this.svnService.getLogEntries(sourceUrl, this.folderPath, 1000),
+                this.svnService.getLogEntries(sourceUrl, this.folderPath, this._pageSize),
                 this.svnService.getMergedRevisions(this.folderPath, sourceUrl),
                 this.svnService.getEligibleRevisions(this.folderPath, sourceUrl)
             ]);
+            this._mergedRevs = mergedRevs;
+            this._eligibleRevs = eligibleRevs;
+            if (logEntries.length > 0) { this._oldestLoadedRev = logEntries[logEntries.length - 1].revision; }
+            this._noMoreLogs = logEntries.length < this._pageSize;
 
             // 过滤：只显示 eligible + merged 的版本（排除分支创建点之前的）
             const visibleRevisions = logEntries
@@ -237,12 +284,56 @@ export class SvnMergePanel {
 
             this._panel.webview.postMessage({
                 command: 'revisionList',
-                revisions: visibleRevisions
+                revisions: visibleRevisions,
+                hasMore: !this._noMoreLogs
             });
         } catch (err: any) {
             this._panel.webview.postMessage({
                 command: 'error',
                 message: `加载版本日志失败: ${err.message}`
+            });
+        }
+    }
+
+    /**
+     * 加载更多日志（向历史更深处分页拉取）
+     */
+    private async _handleLoadMoreRevisions(): Promise<void> {
+        if (!this._currentSourceUrl || this._oldestLoadedRev <= 1 || this._noMoreLogs) {
+            this._panel.webview.postMessage({ command: 'moreRevisions', revisions: [], hasMore: false });
+            return;
+        }
+        try {
+            const collected: Array<{ revision: number; author: string; date: string; message: string; merged: boolean; eligible: boolean }> = [];
+            let pagesFetched = 0;
+            const maxPages = 25; // 安全上限：一次点击最多翻 25 页，避免阻塞
+            // 循环翻页，直到本次至少收集到一些可显示版本（eligible/merged）或到达历史末尾
+            while (collected.length === 0 && !this._noMoreLogs && this._oldestLoadedRev > 1 && pagesFetched < maxPages) {
+                const endRev = this._oldestLoadedRev - 1;
+                const logEntries = await this.svnService.getLogEntries(this._currentSourceUrl, this.folderPath, this._pageSize, endRev);
+                pagesFetched++;
+                if (logEntries.length > 0) { this._oldestLoadedRev = logEntries[logEntries.length - 1].revision; }
+                this._noMoreLogs = logEntries.length < this._pageSize;
+                logEntries
+                    .filter(entry => this._eligibleRevs.has(entry.revision) || this._mergedRevs.has(entry.revision))
+                    .forEach(entry => collected.push({
+                        revision: entry.revision,
+                        author: entry.author,
+                        date: entry.date,
+                        message: entry.message,
+                        merged: this._mergedRevs.has(entry.revision),
+                        eligible: this._eligibleRevs.has(entry.revision)
+                    }));
+            }
+            this._panel.webview.postMessage({
+                command: 'moreRevisions',
+                revisions: collected,
+                hasMore: !this._noMoreLogs
+            });
+        } catch (err: any) {
+            this._panel.webview.postMessage({
+                command: 'error',
+                message: `加载更多日志失败: ${err.message}`
             });
         }
     }

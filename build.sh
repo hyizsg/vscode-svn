@@ -15,6 +15,28 @@ fi
 # 任意命令失败立即退出
 set -e
 
+# 版本号尾号自动 +1（同步更新 package.json 与 package-lock.json）
+echo "自动递增版本尾号..."
+node <<'EOF'
+const fs = require('fs');
+const bump = v => {
+    const p = v.split('.');
+    p[p.length - 1] = String(parseInt(p[p.length - 1], 10) + 1);
+    return p.join('.');
+};
+const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+const newVersion = bump(pkg.version);
+pkg.version = newVersion;
+fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+try {
+    const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+    lock.version = newVersion;
+    if (lock.packages && lock.packages['']) lock.packages[''].version = newVersion;
+    fs.writeFileSync('package-lock.json', JSON.stringify(lock, null, 2) + '\n');
+} catch (e) { /* package-lock.json 不存在时忽略 */ }
+console.log('版本号已更新为: ' + newVersion);
+EOF
+
 # 确保依赖已安装（vsce 打包前会调用 vscode:prepublish -> tsc，必须有 node_modules）
 if [ ! -d "node_modules" ] || [ ! -x "node_modules/.bin/tsc" ]; then
     echo "未检测到 node_modules（或缺少 typescript），正在执行 npm install..."

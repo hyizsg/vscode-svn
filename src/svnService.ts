@@ -1180,6 +1180,68 @@ export class SvnService {
   }
 
   /**
+   * 批量将文件从版本控制中删除（svn delete）
+   * 主要用于处理“丢失”文件：删除会被记录为待提交的 D 状态，提交后同步到版本库
+   * 仿 TortoiseSVN 使用 --targets 文件：安全处理长参数与特殊字符
+   */
+  public async deleteFiles(filePaths: string[]): Promise<void> {
+    if (!filePaths || filePaths.length === 0) return;
+    this.showOutputChannel('SVN批量删除操作');
+    this.outputChannel.appendLine(`批量从版本控制中删除 ${filePaths.length} 个文件`);
+
+    let tmpFile: string | null = null;
+    try {
+      // 处理 @ 转义
+      const targets = filePaths.map(fp => {
+        const fileName = path.basename(fp);
+        return fileName.includes('@') ? `${fp}@` : fp;
+      });
+
+      // 确定工作目录：丢失文件的父目录也可能已不存在，向上遍历找到存在的父目录
+      let cwd = path.dirname(filePaths[0]);
+      while (cwd && cwd !== path.dirname(cwd)) {
+        if (fs.existsSync(cwd)) break;
+        cwd = path.dirname(cwd);
+      }
+
+      tmpFile = path.join(os.tmpdir(), `svn-delete-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+      fs.writeFileSync(tmpFile, targets.join('\n'), 'utf8');
+
+      try {
+        // --force：丢失或已修改的文件也允许删除
+        const result = await this.executeSvnCommand(`delete --force --targets "${tmpFile}"`, cwd);
+        this.outputChannel.appendLine(result);
+      } catch (firstErr: any) {
+        // E155010: 节点未找到，尝试从工作副本根使用相对路径再执行一次
+        if (firstErr.message && firstErr.message.includes('E155010')) {
+          this.outputChannel.appendLine('[deleteFiles] 绝对路径失败，尝试使用相对路径...');
+          const wcRoot = this._findWorkingCopyRoot(cwd);
+          if (wcRoot) {
+            const relTargets = targets.map(t => path.relative(wcRoot, t));
+            fs.writeFileSync(tmpFile, relTargets.join('\n'), 'utf8');
+            this.outputChannel.appendLine(`[deleteFiles] 工作副本根: ${wcRoot}`);
+            const result = await this.executeSvnCommand(`delete --force --targets "${tmpFile}"`, wcRoot);
+            this.outputChannel.appendLine(result);
+          } else {
+            throw firstErr;
+          }
+        } else {
+          throw firstErr;
+        }
+      }
+      this.outputChannel.appendLine('========== SVN批量删除操作完成 ==========');
+    } catch (error: any) {
+      this.outputChannel.appendLine(`错误: ${error.message}`);
+      this.outputChannel.appendLine('========== SVN批量删除操作失败 ==========');
+      throw new Error(`批量删除失败: ${error.message}`);
+    } finally {
+      if (tmpFile) {
+        try { fs.unlinkSync(tmpFile); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  /**
    * 批量将多个文件从 changelist 中移除（一次 SVN 进程）
    * 仿 TortoiseSVN 使用 --targets 文件：安全处理长参数与特殊字符
    */
@@ -2470,15 +2532,30 @@ export class SvnService {
     this.outputChannel.appendLine(`文件: ${filePath}`);
 
     try {
+      let isDir = false;
+      try { isDir = fs.statSync(filePath).isDirectory(); } catch { /* ignore */ }
+
       let fileName = path.basename(filePath);
       const needsEscaping = fileName.includes('@');
       if (needsEscaping) {
         fileName = `${fileName}@`;
       }
 
-      const command = `changelist "${changelistName.replace(/"/g, '\\"')}" "${fileName}"`;
+      // 目录：changelist 无法直接作用于目录本身（会返回 Skipped），需 --depth infinity 递归应用到目录内文件
+      const depthOpt = isDir ? ' --depth infinity' : '';
+      const command = `changelist "${changelistName.replace(/"/g, '\\"')}" "${fileName}"${depthOpt}`;
       const result = await this.executeSvnCommand(command, path.dirname(filePath));
       this.outputChannel.appendLine(result);
+
+      // SVN 对目录本身返回 "Skipped"；若结果里没有任何文件被加入 changelist，则视为未生效
+      const hasSkipped = /Skipped\s/.test(result);
+      const hasMember = /member of changelist|now a member|加入|成员/i.test(result);
+      if (hasSkipped && !hasMember) {
+        throw new Error(isDir
+          ? `目录内没有可加入 changelist 的文件（SVN 已跳过目录本身）`
+          : `SVN 跳过了该文件（Skipped），未加入 changelist`);
+      }
+
       this.outputChannel.appendLine('========== SVN Changelist 操作完成 ==========');
     } catch (error: any) {
       this.outputChannel.appendLine(`错误: ${error.message}`);
@@ -2735,6 +2812,24 @@ export class SvnService {
   }
 
   /**
+   * 将工作副本更新到 HEAD（用于合并前解决 mixed-revision 混合版本问题）
+   * 支持进度回调，输出可实时显示到面板
+   */
+  public async updateToHead(workingDir: string, onProgress?: (line: string) => void): Promise<string> {
+    const cmd = `update "${workingDir}"`;
+    try {
+      this.outputChannel.appendLine(`[updateToHead] 执行: svn ${cmd}`);
+      if (onProgress) {
+        return await this._executeCommandWithProgress(cmd, workingDir, onProgress);
+      }
+      return await this.executeSvnCommand(cmd, workingDir);
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[updateToHead] 失败: ${error.message}`);
+      throw new Error(`更新工作副本失败: ${error.message}`);
+    }
+  }
+
+  /**
    * 执行 SVN 命令并实时回调输出
    */
   private _executeCommandWithProgress(
@@ -2899,14 +2994,16 @@ export class SvnService {
   /**
    * 获取 SVN 日志（解析 XML 格式，用于合并面板版本选择器）
    */
-  public async getLogEntries(svnUrl: string, workingDir: string, limit: number = 500): Promise<Array<{
+  public async getLogEntries(svnUrl: string, workingDir: string, limit: number = 500, endRevision?: number): Promise<Array<{
     revision: number;
     author: string;
     date: string;
     message: string;
   }>> {
     try {
-      const result = await this.executeSvnCommand(`log --xml -l ${limit} "${svnUrl}"`, workingDir);
+      // 支持分页：传入 endRevision 时从该版本往下（向 r1）拉取，用于“加载更多日志”
+      const revArg = (endRevision && endRevision > 1) ? ` -r ${endRevision}:1` : '';
+      const result = await this.executeSvnCommand(`log --xml -l ${limit}${revArg} "${svnUrl}"`, workingDir);
       const entries: Array<{ revision: number; author: string; date: string; message: string }> = [];
       // 解析 <logentry revision="xxx"> ... </logentry>
       const entryRegex = /<logentry[^>]*revision="(\d+)"[^>]*>([\s\S]*?)<\/logentry>/g;

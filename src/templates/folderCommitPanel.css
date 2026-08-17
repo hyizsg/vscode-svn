@@ -478,4 +478,139 @@ textarea {
     font-weight: normal;
     color: var(--vscode-descriptionForeground, #888);
     margin-left: 8px;
+}
+
+/* 提交确认弹框 */
+.commit-confirm-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+}
+
+.commit-confirm-dialog {
+    width: 600px;
+    max-width: 90vw;
+    max-height: 80vh;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--vscode-editorWidget-background, var(--vscode-panel-background));
+    color: var(--vscode-editorWidget-foreground, var(--vscode-foreground));
+    border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+    border-radius: 6px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.commit-confirm-title {
+    padding: 12px 16px;
+    font-weight: 600;
+    font-size: 14px;
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.commit-confirm-body {
+    padding: 12px 16px;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.commit-confirm-section-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground, #888);
+    margin-bottom: 6px;
+}
+
+.commit-confirm-section-label:not(:first-child) {
+    margin-top: 12px;
+}
+
+.commit-confirm-file-list {
+    max-height: 240px;
+    overflow: auto;
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 4px;
+    background-color: var(--vscode-input-background);
+}
+
+.commit-confirm-file-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 10px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--vscode-panel-border);
+    cursor: pointer;
+}
+
+.commit-confirm-file-item:hover {
+    background-color: var(--vscode-list-hoverBackground);
+}
+
+.commit-confirm-file-item:last-child {
+    border-bottom: none;
+}
+
+.commit-confirm-file-status {
+    flex-shrink: 0;
+    min-width: 60px;
+    text-align: center;
+}
+
+.commit-confirm-file-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.commit-confirm-file-dir {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--vscode-descriptionForeground, #888);
+    flex-shrink: 1;
+}
+
+.commit-confirm-message {
+    width: 100%;
+    min-height: 80px;
+    max-height: 160px;
+    margin: 0;
+    resize: vertical;
+    font-family: var(--vscode-editor-font-family);
+    background-color: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border);
+    padding: 8px;
+    box-sizing: border-box;
+}
+
+.commit-confirm-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid var(--vscode-panel-border);
+}
+
+.commit-confirm-footer button {
+    margin: 0;
+    min-width: 80px;
+    padding: 5px 14px;
+}
+
+#commitConfirmCancel {
+    background-color: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+    color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+}
+
+#commitConfirmCancel:hover {
+    background-color: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
 } 

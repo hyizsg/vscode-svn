@@ -7,13 +7,17 @@
         selectedFiles: [],
         enabledTypes: ['modified', 'added', 'deleted', 'unversioned', 'missing'],
         selectedGroups: [],
-        collapsedGroups: []
+        collapsedGroups: [],
+        scrollTop: 0
     };
 
     let selectedFiles = new Set(previousState.selectedFiles);
     let enabledTypes = new Set(previousState.enabledTypes);
     let selectedGroups = new Set(previousState.selectedGroups);
     let collapsedGroups = new Set(previousState.collapsedGroups);
+
+    // 文件列表滚动位置（webview 重绘后恢复，避免跳回顶部）
+    let savedScrollTop = previousState.scrollTop || 0;
 
     // 持久化状态：记录手动取消勾选的文件和手动隐藏的分组
     let uncheckedFiles = new Set(persistentState.uncheckedFiles || []);
@@ -29,7 +33,24 @@
             selectedFiles: Array.from(selectedFiles),
             enabledTypes: Array.from(enabledTypes),
             selectedGroups: Array.from(selectedGroups),
-            collapsedGroups: Array.from(collapsedGroups)
+            collapsedGroups: Array.from(collapsedGroups),
+            scrollTop: savedScrollTop
+        });
+    }
+
+    // 监听文件列表滚动，节流持久化滚动位置
+    function initializeScrollRestore() {
+        const container = document.querySelector('.file-list-container');
+        if (!container) return;
+
+        // 重绘后恢复上次滚动位置
+        container.scrollTop = savedScrollTop;
+
+        let timer = null;
+        container.addEventListener('scroll', () => {
+            savedScrollTop = container.scrollTop;
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => saveState(), 200);
         });
     }
 
@@ -207,6 +228,14 @@
         // 提交按钮
         document.getElementById('submitButton').addEventListener('click', submitCommit);
         document.getElementById('generateAIButton').addEventListener('click', generateAILog);
+
+        // 提交信息输入同步到扩展端（用于 revert 等重绘时保留用户已编辑的内容）
+        const commitMessageEl = document.getElementById('commitMessage');
+        if (commitMessageEl) {
+            commitMessageEl.addEventListener('input', () => {
+                vscode.postMessage({ command: 'commitMessageChanged', message: commitMessageEl.value });
+            });
+        }
 
         // 初始化页面状态
         updateFileList();
@@ -396,10 +425,114 @@
             return;
         }
 
-        vscode.postMessage({
-            command: 'commit',
-            message: message,
-            files: selectedFilesList
+        // 提交前先弹确认框展示文件列表与提交信息（只读）
+        showCommitConfirm(message, selectedFilesList);
+    }
+
+    // 待确认的提交内容
+    let pendingCommit = null;
+
+    /**
+     * 展示提交确认弹框：只读展示待提交文件列表与提交信息
+     * @param {string} message 提交信息
+     * @param {string[]} files 待提交文件路径列表
+     */
+    function showCommitConfirm(message, files) {
+        pendingCommit = { message: message, files: files };
+
+        const overlay = document.getElementById('commitConfirmOverlay');
+        const listEl = document.getElementById('confirmFileList');
+        const countEl = document.getElementById('confirmFileCount');
+        const messageEl = document.getElementById('confirmMessage');
+        if (!overlay || !listEl || !messageEl) return;
+
+        countEl.textContent = `提交文件（${files.length} 个）`;
+        messageEl.value = message;
+
+        // 从 DOM 中查找每个文件的状态/名称/目录信息用于展示
+        const itemMap = new Map();
+        document.querySelectorAll('.file-item').forEach(el => {
+            itemMap.set(el.getAttribute('data-path'), el);
+        });
+
+        listEl.innerHTML = '';
+        files.forEach(filePath => {
+            const el = itemMap.get(filePath);
+            const row = document.createElement('div');
+            row.className = 'commit-confirm-file-item';
+            row.setAttribute('data-path', filePath);
+            row.title = '双击查看差异';
+            // 双击查看该文件的差异对比
+            row.addEventListener('dblclick', () => {
+                showDiff(filePath);
+            });
+
+            const statusSpan = document.createElement('span');
+            statusSpan.className = 'commit-confirm-file-status';
+            if (el) {
+                const statusEl = el.querySelector('.file-status');
+                statusSpan.textContent = statusEl ? statusEl.textContent : '';
+                const type = el.getAttribute('data-type');
+                if (type) statusSpan.classList.add('status-' + type);
+            }
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'commit-confirm-file-name';
+            const dirSpan = document.createElement('span');
+            dirSpan.className = 'commit-confirm-file-dir';
+            if (el) {
+                const nameEl = el.querySelector('.file-name');
+                const pathEl = el.querySelector('.file-path');
+                nameSpan.textContent = nameEl ? nameEl.textContent : filePath;
+                dirSpan.textContent = pathEl ? pathEl.textContent : '';
+            } else {
+                nameSpan.textContent = filePath;
+            }
+
+            row.appendChild(statusSpan);
+            row.appendChild(nameSpan);
+            row.appendChild(dirSpan);
+            listEl.appendChild(row);
+        });
+
+        overlay.style.display = '';
+        const okBtn = document.getElementById('commitConfirmOk');
+        if (okBtn) okBtn.focus();
+    }
+
+    function hideCommitConfirm() {
+        const overlay = document.getElementById('commitConfirmOverlay');
+        if (overlay) overlay.style.display = 'none';
+        pendingCommit = null;
+    }
+
+    function initializeCommitConfirm() {
+        const overlay = document.getElementById('commitConfirmOverlay');
+        if (!overlay) return;
+
+        document.getElementById('commitConfirmOk').addEventListener('click', () => {
+            if (!pendingCommit) return;
+            const { message, files } = pendingCommit;
+            hideCommitConfirm();
+            vscode.postMessage({
+                command: 'commit',
+                message: message,
+                files: files
+            });
+        });
+
+        document.getElementById('commitConfirmCancel').addEventListener('click', hideCommitConfirm);
+
+        // 点击遮罩层空白处关闭
+        overlay.addEventListener('mousedown', (e) => {
+            if (e.target === overlay) hideCommitConfirm();
+        });
+
+        // ESC 关闭确认框
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && overlay.style.display !== 'none') {
+                hideCommitConfirm();
+            }
         });
     }
 
@@ -413,6 +546,9 @@
         const selectedValue = select.value;
         if (selectedValue) {
             document.getElementById('commitMessage').value = selectedValue;
+            // 程序赋值不触发 input 事件，需手动同步到扩展端，
+            // 避免 webview 重绘（revert/删除等）后提交信息被还原
+            vscode.postMessage({ command: 'commitMessageChanged', message: selectedValue });
         }
         select.selectedIndex = 0;
     }
@@ -426,6 +562,14 @@
             return;
         }
         vscode.postMessage({ command: 'deleteUnversionedFiles', files: filePaths });
+    }
+
+    // 从版本控制中删除（svn delete），用于“丢失”文件：删除标记为待提交
+    function deleteFromSvn(filePaths) {
+        if (!filePaths || filePaths.length === 0) {
+            return;
+        }
+        vscode.postMessage({ command: 'deleteFromSvn', files: filePaths });
     }
 
     function revertFiles(filePaths) {
@@ -512,6 +656,8 @@
         });
         const allUnversioned = activePaths.every(p => typeMap.get(p) === 'unversioned');
         const allVersioned = activePaths.every(p => typeMap.get(p) !== 'unversioned');
+        // 丢失文件（本地已删、版本库仍存在）可从 SVN 删除
+        const allMissing = activePaths.every(p => typeMap.get(p) === 'missing');
         const anchorType = typeMap.get(anchorPath);
         const anchorCanDiff = anchorType && anchorType !== 'deleted' && anchorType !== 'missing' && anchorType !== 'unversioned';
 
@@ -539,6 +685,7 @@
             { key: 'diff', label: '查看差异', enabled: activePaths.length === 1 && anchorCanDiff },
             { key: 'revert', label: activePaths.length > 1 ? `恢复（${activePaths.length}）` : '恢复', enabled: allVersioned },
             { key: 'delete', label: activePaths.length > 1 ? `删除（${activePaths.length}）` : '删除', enabled: allUnversioned },
+            { key: 'deleteFromSvn', label: activePaths.length > 1 ? `从 SVN 删除（${activePaths.length}）` : '从 SVN 删除', enabled: allMissing },
             { type: 'separator' }
         ];
         // 移动到已有 changelist
@@ -587,6 +734,7 @@
                     if (it.key === 'diff') showDiff(anchorPath);
                     else if (it.key === 'revert') revertFiles(activePaths);
                     else if (it.key === 'delete') deleteUnversionedFiles(activePaths);
+                    else if (it.key === 'deleteFromSvn') deleteFromSvn(activePaths);
                 });
             }
             menu.appendChild(el);
@@ -640,6 +788,8 @@
                 } else {
                     textarea.value = message.message;
                 }
+                // 同步到扩展端，确保 webview 重载时保留
+                vscode.postMessage({ command: 'commitMessageChanged', message: textarea.value });
                 break;
             case 'getSelectedFiles':
                 vscode.postMessage({
@@ -693,8 +843,12 @@
         initializeGroupSelectAll();
         initializeChangelistDelete();
         initializeDragAndDrop();
+        initializeCommitConfirm();
+        initializeScrollRestore();
         updateFileList();
         updateCheckboxes();
+        // 通知扩展端 webview 已就绪（用于预填默认提交日志等）
+        vscode.postMessage({ command: 'webviewReady' });
     });
 
     function initializeGroupCollapse() {

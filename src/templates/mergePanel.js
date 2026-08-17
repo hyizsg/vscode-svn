@@ -6,6 +6,7 @@
     const refreshBtn = document.getElementById('refreshBranches');
     const manualUrl = document.getElementById('manualUrl');
     const loadRevisionsBtn = document.getElementById('loadRevisionsBtn');
+    const loadMoreRevisionsBtn = document.getElementById('loadMoreRevisionsBtn');
     const selectModeDiv = document.getElementById('selectMode');
     const manualModeDiv = document.getElementById('manualMode');
     const revisionPicker = document.getElementById('revisionPicker');
@@ -28,6 +29,7 @@
     let allRevisions = []; // { revision, author, date, message, merged, eligible }
     let selectedRevisions = new Set(); // 用户选中的版本号
     let lastClickedRev = null; // 最后一次点击的版本号，用于 shift 多选
+    let hasMoreLogs = false; // 是否还有更多日志可加载
 
     // 初始化
     document.addEventListener('DOMContentLoaded', () => {
@@ -37,6 +39,7 @@
         setupFilterHandlers();
         setupButtons();
         vscode.postMessage({ command: 'listBranches' });
+        vscode.postMessage({ command: 'getFilterState' });
     });
 
     // 源模式切换
@@ -80,6 +83,8 @@
     function loadRevisionsForSource(sourceUrl) {
         allRevisions = [];
         selectedRevisions.clear();
+        hasMoreLogs = false;
+        updateLoadMore();
         revisionListBody.innerHTML = '<div class="revision-empty">正在加载版本日志...</div>';
         revisionSummary.textContent = '';
         vscode.postMessage({ command: 'loadRevisions', sourceUrl });
@@ -88,14 +93,39 @@
     function clearRevisionList() {
         allRevisions = [];
         selectedRevisions.clear();
+        hasMoreLogs = false;
+        updateLoadMore();
         revisionListBody.innerHTML = '<div class="revision-empty">点击上方「🔄 加载版本日志」按钮开始加载</div>';
         revisionSummary.textContent = '';
     }
 
+    function doLoadMore() {
+        if (hasMoreLogs === false) { return; }
+        loadMoreRevisionsBtn.disabled = true;
+        loadMoreRevisionsBtn.textContent = '加载中…';
+        vscode.postMessage({ command: 'loadMoreRevisions' });
+    }
+
+    function updateLoadMore() {
+        if (!loadMoreRevisionsBtn) { return; }
+        loadMoreRevisionsBtn.style.display = hasMoreLogs ? '' : 'none';
+    }
+
     // 过滤处理
+    let _filterSaveTimer = null;
+    function saveFilterState() {
+        clearTimeout(_filterSaveTimer);
+        _filterSaveTimer = setTimeout(() => {
+            vscode.postMessage({
+                command: 'saveFilterState',
+                filterText: revisionFilterInput.value || '',
+                hideMerged: hideMergedCheckbox.checked
+            });
+        }, 300);
+    }
     function setupFilterHandlers() {
-        revisionFilterInput.addEventListener('input', () => renderRevisionList());
-        hideMergedCheckbox.addEventListener('change', () => renderRevisionList());
+        revisionFilterInput.addEventListener('input', () => { renderRevisionList(); saveFilterState(); });
+        hideMergedCheckbox.addEventListener('change', () => { renderRevisionList(); saveFilterState(); });
         revSelectAll.addEventListener('change', () => {
             const visible = getVisibleEligibleRevisions();
             if (revSelectAll.checked) {
@@ -120,6 +150,10 @@
                 if (!url) { setStatus('请先选择或输入合并源', 'error'); return; }
                 loadRevisionsForSource(url);
             });
+        }
+
+        if (loadMoreRevisionsBtn) {
+            loadMoreRevisionsBtn.addEventListener('click', doLoadMore);
         }
 
         dryRunBtn.addEventListener('click', () => {
@@ -484,7 +518,23 @@
             case 'revisionList':
                 allRevisions = msg.revisions || [];
                 selectedRevisions.clear();
+                hasMoreLogs = !!msg.hasMore;
+                updateLoadMore();
                 renderRevisionList();
+                break;
+            case 'moreRevisions':
+                if (loadMoreRevisionsBtn) {
+                    loadMoreRevisionsBtn.disabled = false;
+                    loadMoreRevisionsBtn.textContent = '↓ 加载更多(200)';
+                }
+                hasMoreLogs = !!msg.hasMore;
+                if (msg.revisions && msg.revisions.length) {
+                    const existing = new Set(allRevisions.map(r => r.revision));
+                    (msg.revisions || []).forEach(r => { if (!existing.has(r.revision)) allRevisions.push(r); });
+                    allRevisions.sort((a, b) => b.revision - a.revision);
+                    renderRevisionList();
+                }
+                updateLoadMore();
                 break;
             case 'mergeStarted':
                 setStatus('正在执行合并...', 'loading');
@@ -533,6 +583,11 @@
             case 'error':
                 setStatus(msg.message, 'error');
                 setButtonsDisabled(false);
+                break;
+            case 'restoreFilterState':
+                if (msg.filterText) revisionFilterInput.value = msg.filterText;
+                if (msg.hideMerged) hideMergedCheckbox.checked = true;
+                if (allRevisions.length > 0) renderRevisionList();
                 break;
         }
     });

@@ -97,7 +97,7 @@ async function uploadFileToSvn(filePath: string): Promise<void> {
  * 上传文件夹到SVN
  * @param folderPath 文件夹路径
  */
-async function uploadFolderToSvn(folderPath: string): Promise<void> {
+async function uploadFolderToSvn(folderPath: string, defaultMessage?: string): Promise<void> {
   try {
     // 检查SVN是否已安装
     if (!await svnService.isSvnInstalled()) {
@@ -132,7 +132,8 @@ async function uploadFolderToSvn(folderPath: string): Promise<void> {
       svnService,
       diffProvider,
       logStorage,
-      extensionContext
+      extensionContext,
+      defaultMessage
     );
   } catch (error: any) {
     vscode.window.showErrorMessage('上传文件夹到SVN失败: ' + error.message);
@@ -2590,7 +2591,7 @@ export function activate(context: vscode.ExtensionContext) {
   });
   
   // 注册上传文件夹命令
-  const uploadFolderCommand = vscode.commands.registerCommand('vscode-svn.uploadFolder', async (folderUri?: vscode.Uri) => {
+  const uploadFolderCommand = vscode.commands.registerCommand('vscode-svn.uploadFolder', async (folderUri?: vscode.Uri, defaultMessage?: string) => {
     if (!folderUri) {
       // 如果没有通过右键菜单选择文件夹，则使用当前工作区文件夹
       if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
@@ -2606,7 +2607,7 @@ export function activate(context: vscode.ExtensionContext) {
       return;
     }
     
-    await uploadFolderToSvn(folderUri.fsPath);
+    await uploadFolderToSvn(folderUri.fsPath, defaultMessage);
   });
   
   // 注册提交文件命令（显示差异）

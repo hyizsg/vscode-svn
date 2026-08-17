@@ -23,6 +23,13 @@ export class MergeToBranchPanel {
     private targetPath: string = '';
     private disposables: vscode.Disposable[] = [];
 
+    // “加载更多日志”分页状态
+    private mergedRevs: Set<number> = new Set();
+    private eligibleRevs: Set<number> = new Set();
+    private oldestLoadedRev: number = 0;
+    private noMoreLogs: boolean = false;
+    private readonly pageSize: number = 200;
+
     public static createOrShow(context: vscode.ExtensionContext, svnService: SvnService, sourcePath: string) {
         const column = vscode.ViewColumn.One;
         if (MergeToBranchPanel.currentPanel) {
@@ -57,7 +64,8 @@ export class MergeToBranchPanel {
                     case 'browseTarget': await this.handleBrowseTarget(); return;
                     case 'useLastTarget': await this.handleUseLastTarget(msg.targetPath); return;
                     case 'loadEligible': await this.handleLoadEligible(msg.targetPath); return;
-                    case 'startMerge': await this.handleStartMerge(msg.targetPath, msg.revs as number[], msg.message); return;
+                    case 'loadMore': await this.handleLoadMore(msg.targetPath); return;
+                    case 'startMerge': await this.handleStartMerge(msg.targetPath, msg.revs as number[], msg.message, msg.revisionDetails); return;
                     case 'resolveConflict': await this.handleResolveConflict(msg.filePath, msg.resolution); return;
                     case 'resolveAll': await this.handleResolveAll(msg.resolution); return;
                     case 'openMergeEditor': await this.handleOpenMergeEditor(msg.filePath); return;
@@ -155,12 +163,22 @@ export class MergeToBranchPanel {
             catch (e: any) { this.post({ command: 'eligibleRevs', ok: false, error: e.message }); return; }
         }
         try {
-            // 并行获取：全量日志、已合并、未合并 【对齐 mergePanel】
+            // 重置分页状态
+            this.mergedRevs = new Set();
+            this.eligibleRevs = new Set();
+            this.oldestLoadedRev = 0;
+            this.noMoreLogs = false;
+
+            // 并行获取：首屏日志、已合并、未合并 【对齐 mergePanel】
             const [logEntries, mergedRevs, eligibleRevs] = await Promise.all([
-                this.svnService.getLogEntries(this.sourceUrl, this.sourcePath, 1000),
+                this.svnService.getLogEntries(this.sourceUrl, this.sourcePath, this.pageSize),
                 this.svnService.getMergedRevisions(targetPath, this.sourceUrl),
                 this.svnService.getEligibleRevisions(targetPath, this.sourceUrl)
             ]);
+            this.mergedRevs = mergedRevs;
+            this.eligibleRevs = eligibleRevs;
+            if (logEntries.length > 0) { this.oldestLoadedRev = logEntries[logEntries.length - 1].revision; }
+            this.noMoreLogs = logEntries.length < this.pageSize;
             // 过滤：只保留 eligible 或 merged 的版本（排除分支创建点之前的不相关版本）
             const revs = logEntries
                 .filter(e => eligibleRevs.has(e.revision) || mergedRevs.has(e.revision))
@@ -172,13 +190,46 @@ export class MergeToBranchPanel {
                     merged: mergedRevs.has(e.revision),
                     eligible: eligibleRevs.has(e.revision)
                 }));
-            this.post({ command: 'eligibleRevs', ok: true, revs, sourceUrl: this.sourceUrl });
+            this.post({ command: 'eligibleRevs', ok: true, revs, sourceUrl: this.sourceUrl, hasMore: !this.noMoreLogs });
         } catch (err: any) {
             this.post({ command: 'eligibleRevs', ok: false, error: err.message });
         }
     }
 
-    private async handleStartMerge(targetPath: string, revs: number[], message: string) {
+    private async handleLoadMore(targetPath: string) {
+        if (!this.sourceUrl || this.oldestLoadedRev <= 1 || this.noMoreLogs) {
+            this.post({ command: 'moreRevs', ok: true, revs: [], hasMore: false });
+            return;
+        }
+        try {
+            const collected: Array<{ revision: number; author: string; date: string; message: string; merged: boolean; eligible: boolean }> = [];
+            let pagesFetched = 0;
+            const maxPages = 25; // 安全上限：一次点击最多翻 25 页，避免阻塞
+            // 循环翻页，直到本次至少收集到一些可显示版本（eligible/merged）或到达历史末尾
+            while (collected.length === 0 && !this.noMoreLogs && this.oldestLoadedRev > 1 && pagesFetched < maxPages) {
+                const endRev = this.oldestLoadedRev - 1;
+                const logEntries = await this.svnService.getLogEntries(this.sourceUrl, this.sourcePath, this.pageSize, endRev);
+                pagesFetched++;
+                if (logEntries.length > 0) { this.oldestLoadedRev = logEntries[logEntries.length - 1].revision; }
+                this.noMoreLogs = logEntries.length < this.pageSize;
+                logEntries
+                    .filter(e => this.eligibleRevs.has(e.revision) || this.mergedRevs.has(e.revision))
+                    .forEach(e => collected.push({
+                        revision: e.revision,
+                        author: e.author,
+                        date: e.date,
+                        message: e.message,
+                        merged: this.mergedRevs.has(e.revision),
+                        eligible: this.eligibleRevs.has(e.revision)
+                    }));
+            }
+            this.post({ command: 'moreRevs', ok: true, revs: collected, hasMore: !this.noMoreLogs });
+        } catch (err: any) {
+            this.post({ command: 'moreRevs', ok: false, error: err.message });
+        }
+    }
+
+    private async handleStartMerge(targetPath: string, revs: number[], message: string, revisionDetails?: Array<{ revision: number; message: string }>) {
         if (!targetPath) { this.post({ command: 'error', message: '请选择目标分支工作副本' }); return; }
         if (!revs || revs.length === 0) { this.post({ command: 'error', message: '请勾选至少一个版本' }); return; }
         if (!this.sourceUrl) {
@@ -191,6 +242,17 @@ export class MergeToBranchPanel {
         this.post({ command: 'phase', phase: 'merging' });
         this.post({ command: 'progress', text: `开始合并 ${revs.length} 个版本到 ${targetPath}\n源 URL: ${this.sourceUrl}\n` });
 
+        // 合并前先更新目标工作副本到 HEAD，解决 mixed-revision（混合版本）问题
+        try {
+            this.post({ command: 'progress', text: `\n正在更新目标工作副本到最新版本（解决混合版本）…\n` });
+            await this.svnService.updateToHead(targetPath, (line) => this.post({ command: 'progress', text: line }));
+            this.post({ command: 'progress', text: `✅ 更新完成\n\n` });
+        } catch (err: any) {
+            this.post({ command: 'progress', text: `\n❌ 更新目标工作副本失败：${err.message}\n` });
+            this.post({ command: 'phase', phase: 'error' });
+            return;
+        }
+
         try {
             await this.svnService.merge(targetPath, this.sourceUrl, {
                 revisionRange: range,
@@ -202,13 +264,30 @@ export class MergeToBranchPanel {
             return;
         }
 
+        this.post({ command: 'mergeFinished', defaultMessage: this.buildDefaultMessage(revs, message, revisionDetails) });
         await this.refreshAndPostConflicts();
-        this.post({ command: 'mergeFinished', defaultMessage: this.buildDefaultMessage(revs, message) });
     }
 
-    private buildDefaultMessage(revs: number[], userMessage: string): string {
-        if (userMessage && userMessage.trim()) return userMessage;
-        return `Merged from ${this.sourceUrl} r${revs.join(',r')}`;
+    /**
+     * 从完整 URL 提取分支短名（trunk / tags/xxx / branches/xxx），对齐 mergePanel
+     */
+    private shortBranchName(url: string): string {
+        const patterns = [/\/(trunk)(?:\/.*)?$/, /\/(tags\/[^\/]+)(?:\/.*)?$/, /\/(branches\/[^\/]+)(?:\/.*)?$/];
+        for (const p of patterns) { const m = url.match(p); if (m) { return m[1]; } }
+        return url;
+    }
+
+    private buildDefaultMessage(revs: number[], userMessage: string, revisionDetails?: Array<{ revision: number; message: string }>): string {
+        if (userMessage && userMessage.trim()) { return userMessage; }
+        const branchName = this.shortBranchName(this.sourceUrl);
+        // 有详细版本信息：参考 merge 面板格式，带各版本日志
+        if (revisionDetails && revisionDetails.length > 0) {
+            const revNums = revisionDetails.map(d => d.revision).join(', ');
+            let msg = `Merged revision(s) ${revNums} from ${branchName}:\n`;
+            msg += revisionDetails.map(d => `${d.message}`).join('\n........\n');
+            return msg;
+        }
+        return `Merged revision(s) ${revs.join(', ')} from ${branchName}`;
     }
 
     private async refreshAndPostConflicts() {
@@ -272,17 +351,16 @@ export class MergeToBranchPanel {
             }
         } catch { /* ignore */ }
 
-        if (!message || !message.trim()) { this.post({ command: 'error', message: '请填写提交日志' }); return; }
-
-        this.post({ command: 'phase', phase: 'committing' });
-        this.post({ command: 'progress', text: `\n开始提交到 ${this.targetPath}\n` });
+        // 不再直接 commit，而是打开目标分支的提交面板，带入合并日志作为默认提交信息
+        const target = this.targetPath;
+        const defaultMsg = (message && message.trim()) ? message : '';
         try {
-            await this.svnService.commit(this.targetPath, message);
-            this.post({ command: 'progress', text: `✅ 提交成功\n` });
+            this.post({ command: 'progress', text: `\n正在打开提交面板：${target}\n` });
+            await vscode.commands.executeCommand('vscode-svn.uploadFolder', vscode.Uri.file(target), defaultMsg);
+            this.post({ command: 'progress', text: `✅ 已打开提交面板，请在提交面板中确认并提交\n` });
             this.post({ command: 'phase', phase: 'done' });
-            vscode.window.showInformationMessage(`已合并并提交到 ${path.basename(this.targetPath)}`);
         } catch (err: any) {
-            this.post({ command: 'progress', text: `❌ 提交失败：${err.message}\n` });
+            this.post({ command: 'progress', text: `❌ 打开提交面板失败：${err.message}\n` });
             this.post({ command: 'phase', phase: 'error' });
         }
     }
@@ -359,6 +437,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
   <h3>② 选择要合并的版本（未合并到目标分支）</h3>
   <div class="row">
     <button id="btnLoad" class="secondary">🔄 加载未合并版本</button>
+    <button id="btnLoadMoreTop" class="secondary hide">↓ 加载更多(200)</button>
     <span class="muted" id="revHint">先选择目标分支</span>
   </div>
   <div class="revision-filter-bar hide" id="filterBar">
@@ -375,6 +454,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
     <div id="revisionListBody" class="revision-list-body"></div>
   </div>
   <div class="revision-summary" id="revisionSummary"></div>
+  <div class="row hide" id="loadMoreRow" style="justify-content:center">
+    <button id="btnLoadMore" class="secondary">↓ 加载更多日志</button>
+  </div>
 </div>
 
 <div class="section">
@@ -411,6 +493,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
   let phase = 'idle';
   let allRevisions = [];
   let selectedRevisions = new Set();
+  let hasMoreLogs = false;
 
   function send(c,p={}){ vscode.postMessage(Object.assign({command:c},p)); }
   function appendLog(t){ const p=$('progress'); p.textContent += t; p.scrollTop=p.scrollHeight; $('progressSection').classList.remove('hide'); }
@@ -427,12 +510,25 @@ button:disabled{opacity:.5;cursor:not-allowed}
     $('revHint').textContent='加载中…';
     $('revListContainer').classList.add('hide');
     $('filterBar').classList.add('hide');
+    hasMoreLogs = false; updateLoadMore();
     send('loadEligible',{ targetPath });
   });
+  $('btnLoadMore').addEventListener('click', doLoadMore);
+  $('btnLoadMoreTop').addEventListener('click', doLoadMore);
+  function doLoadMore(){
+    if (!targetPath) return;
+    $('btnLoadMore').disabled = true; $('btnLoadMore').textContent = '加载中…';
+    $('btnLoadMoreTop').disabled = true; $('btnLoadMoreTop').textContent = '加载中…';
+    send('loadMore',{ targetPath });
+  }
   $('btnMerge').addEventListener('click', ()=>{
     const checked = Array.from(selectedRevisions).sort((a,b)=>a-b);
     if (checked.length===0) return;
-    send('startMerge',{ targetPath, revs: checked, message: $('commitMsg').value });
+    const revisionDetails = checked.map(rev=>{
+      const r = allRevisions.find(x=> x.revision===rev);
+      return { revision: rev, message: r ? r.message : '' };
+    });
+    send('startMerge',{ targetPath, revs: checked, revisionDetails, message: $('commitMsg').value });
   });
   $('btnCommit').addEventListener('click', ()=>{
     const msg = $('commitMsg').value.trim();
@@ -495,7 +591,7 @@ button:disabled{opacity:.5;cursor:not-allowed}
         if (isMerged) cls.push('merged');
         if (sel) cls.push('selected');
         const dateStr = (r.date||'').split(/[T ]/).slice(0,2).join(' ').slice(0,16);
-        const msg = escapeHtml(r.message).replace(/\n/g,' ');
+        const msg = escapeHtml(r.message).replace(/\\n/g,' ');
         html += '<div class="'+cls.join(' ')+'" data-rev="'+r.revision+'" data-merged="'+(isMerged?'1':'0')+'">'
           + '<span class="rev-col-check"><input type="checkbox" '+(sel?'checked':'')+' '+(isMerged?'disabled':'')+'></span>'
           + '<span class="rev-col-num">r'+r.revision+'</span>'
@@ -541,6 +637,11 @@ button:disabled{opacity:.5;cursor:not-allowed}
     const visible = getVisibleRevisions().filter(r=> !r.merged);
     if (visible.length===0){ $('revSelectAll').checked = false; return; }
     $('revSelectAll').checked = visible.every(r=> selectedRevisions.has(r.revision));
+  }
+
+  function updateLoadMore(){
+    if (hasMoreLogs){ $('loadMoreRow').classList.remove('hide'); $('btnLoadMoreTop').classList.remove('hide'); }
+    else { $('loadMoreRow').classList.add('hide'); $('btnLoadMoreTop').classList.add('hide'); }
   }
 
   function renderConflicts(items){
@@ -599,16 +700,33 @@ button:disabled{opacity:.5;cursor:not-allowed}
         $('revListContainer').classList.add('hide');
         $('filterBar').classList.add('hide');
         $('revisionSummary').textContent = '';
+        hasMoreLogs = false; updateLoadMore();
         refreshMergeBtn();
         break;
       case 'eligibleRevs':
         if (!m.ok){ $('revHint').textContent = '加载失败：' + m.error; return; }
         allRevisions = m.revs || [];
         selectedRevisions.clear();
+        hasMoreLogs = !!m.hasMore;
         const eligibleCount = allRevisions.filter(r=> !r.merged).length;
         const mergedCount = allRevisions.filter(r=> r.merged).length;
         $('revHint').textContent = '可合并 '+eligibleCount+' 个、已合并 '+mergedCount+' 个';
-        renderRevisions(); refreshMergeBtn();
+        renderRevisions(); updateLoadMore(); refreshMergeBtn();
+        break;
+      case 'moreRevs':
+        $('btnLoadMore').disabled = false;
+        $('btnLoadMore').textContent = '↓ 加载更多日志';
+        $('btnLoadMoreTop').disabled = false;
+        $('btnLoadMoreTop').textContent = '↓ 加载更多(200)';
+        if (!m.ok){ alert('加载更多失败：' + m.error); return; }
+        hasMoreLogs = !!m.hasMore;
+        if (m.revs && m.revs.length){
+          const existing = new Set(allRevisions.map(r=> r.revision));
+          m.revs.forEach(r=>{ if (!existing.has(r.revision)) allRevisions.push(r); });
+          allRevisions.sort((a,b)=> b.revision - a.revision);
+          renderRevisions();
+        }
+        updateLoadMore();
         break;
       case 'phase':
         phase = m.phase;
@@ -625,6 +743,9 @@ button:disabled{opacity:.5;cursor:not-allowed}
       case 'mergeFinished':
         phase = 'mergeFinished';
         if ($('commitMsg').value.trim()==='' && m.defaultMessage){ $('commitMsg').value = m.defaultMessage; }
+        // 合并完成，显示提交入口（若后续发现冲突，renderConflicts 会更新按钮文案与列表）
+        $('btnCommit').classList.remove('hide');
+        if ($('btnCommit').textContent.indexOf('剩余')<0){ $('btnCommit').textContent = '📤 提交合并结果'; }
         break;
       case 'error':
         appendLog('\\n[错误] ' + m.message + '\\n');
