@@ -50,6 +50,15 @@
         </div>
     </div>
 
+    <!-- 提交过程实时输出（内嵌在当前面板，不新开窗口） -->
+    <div id="commitOutputSection" class="commit-output-section" style="display: none;">
+        <div class="commit-output-header">
+            <span>提交输出</span>
+            <button id="clearOutputButton" title="清空输出内容">清空</button>
+        </div>
+        <div id="commitOutput" class="commit-output"></div>
+    </div>
+
     <div class="commit-section">
         <textarea id="commitMessage" placeholder="请输入提交信息">{{LAST_COMMIT_MESSAGE}}</textarea>
         <div class="button-container">

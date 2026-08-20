@@ -480,6 +480,42 @@ textarea {
     margin-left: 8px;
 }
 
+/* 提交过程实时输出（内嵌在当前面板） */
+.commit-output-section {
+    flex-shrink: 0;
+    margin-bottom: 10px;
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 4px;
+    background-color: var(--vscode-panel-background);
+}
+
+.commit-output-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--vscode-descriptionForeground, #888);
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.commit-output-header button {
+    margin: 0;
+    padding: 1px 8px;
+    font-size: 11px;
+    min-width: fit-content;
+}
+
+.commit-output {
+    max-height: 180px;
+    overflow: auto;
+    padding: 8px;
+    white-space: pre-wrap;
+    font-family: monospace;
+    font-size: 12px;
+}
+
 /* 提交确认弹框 */
 .commit-confirm-overlay {
     position: fixed;

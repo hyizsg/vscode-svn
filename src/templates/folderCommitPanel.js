@@ -772,6 +772,16 @@
         });
     }
 
+    // “清空”按钮：清空内嵌提交输出内容
+    function initializeOutputClear() {
+        const btn = document.getElementById('clearOutputButton');
+        if (!btn) return;
+        btn.addEventListener('click', () => {
+            const output = document.getElementById('commitOutput');
+            if (output) output.textContent = '';
+        });
+    }
+
     function updateExtensionFilter() {
         // 已合并到 TS 端 _renderGroupFilter，此处保留空函数避免报错
     }
@@ -813,8 +823,70 @@
                     aiButton.textContent = '使用AI生成提交日志';
                 }
                 break;
+            case 'commitStarted':
+                showCommitOutput();
+                break;
+            case 'appendCommitOutput':
+                appendCommitOutput(message.text);
+                break;
+            case 'commitFinished':
+                onCommitFinished(message.success === true, message.files || []);
+                break;
         }
     });
+
+    // 提交开始：显示内嵌输出区并禁用提交按钮
+    function showCommitOutput() {
+        const section = document.getElementById('commitOutputSection');
+        const output = document.getElementById('commitOutput');
+        if (!section || !output) return;
+        output.textContent = '';
+        section.style.display = '';
+        const submitBtn = document.getElementById('submitButton');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = '提交中...';
+        }
+    }
+
+    // 追加提交过程输出并自动滚动到底部
+    function appendCommitOutput(text) {
+        const output = document.getElementById('commitOutput');
+        if (!output) return;
+        output.textContent += (text || '');
+        output.scrollTop = output.scrollHeight;
+    }
+
+    // 提交结束：恢复按钮；成功时从列表移除已提交文件并清空提交信息
+    function onCommitFinished(success, files) {
+        const submitBtn = document.getElementById('submitButton');
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = '提交';
+        }
+        if (!success || !files || files.length === 0) return;
+
+        const removeSet = new Set(files);
+        document.querySelectorAll('.file-item').forEach(el => {
+            if (removeSet.has(el.getAttribute('data-path'))) {
+                el.remove();
+            }
+        });
+        files.forEach(p => {
+            selectedFiles.delete(p);
+            uncheckedFiles.delete(p);
+            activeFiles.delete(p);
+        });
+        syncPersistentState();
+        updateFileList();
+
+        // 提交成功后清空提交信息，准备下一次提交
+        const textarea = document.getElementById('commitMessage');
+        if (textarea) {
+            textarea.value = '';
+            vscode.postMessage({ command: 'commitMessageChanged', message: '' });
+        }
+    }
 
     // 页面加载完成后初始化
     document.addEventListener('DOMContentLoaded', () => {
@@ -845,6 +917,7 @@
         initializeDragAndDrop();
         initializeCommitConfirm();
         initializeScrollRestore();
+        initializeOutputClear();
         updateFileList();
         updateCheckboxes();
         // 通知扩展端 webview 已就绪（用于预填默认提交日志等）

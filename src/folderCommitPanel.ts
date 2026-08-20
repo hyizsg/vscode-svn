@@ -419,147 +419,16 @@ export class SvnFolderCommitPanel {
         }
     }
 
-    /**
-     * 创建提交输出面板（类似 update 面板）
-     */
-    private _createCommitOutputPanel(): vscode.WebviewPanel {
-        const outputPanel = vscode.window.createWebviewPanel(
-            'svnCommitOutput',
-            `SVN提交: ${require('path').basename(this.folderPath)}`,
-            vscode.ViewColumn.One,
-            { enableScripts: true, retainContextWhenHidden: true }
-        );
-
-        outputPanel.webview.html = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SVN提交</title>
-    <style>
-        body {
-            font-family: var(--vscode-font-family);
-            font-size: var(--vscode-font-size);
-            color: var(--vscode-foreground);
-            background-color: var(--vscode-editor-background);
-            margin: 0;
-            padding: 10px 10px 16px 10px;
-            box-sizing: border-box;
-            height: 100vh;
-            overflow: hidden;
-        }
-        .container {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-        }
-        .output-container {
-            flex: 1;
-            min-height: 0;
-            padding: 10px;
-            border: 1px solid var(--vscode-panel-border);
-            background-color: var(--vscode-editor-background);
-            overflow: auto;
-            white-space: pre-wrap;
-            font-family: monospace;
-            margin-bottom: 10px;
-        }
-        .button-container {
-            display: flex;
-            justify-content: flex-end;
-            align-items: center;
-            gap: 10px;
-            flex-shrink: 0;
-            padding-bottom: 4px;
-        }
-        button {
-            background-color: var(--vscode-button-background);
-            color: var(--vscode-button-foreground);
-            border: none;
-            padding: 8px 12px;
-            min-width: 96px;
-            height: 32px;
-            box-sizing: border-box;
-            cursor: pointer;
-            font-size: inherit;
-            line-height: 1;
-            border-radius: 2px;
-        }
-        button:hover {
-            background-color: var(--vscode-button-hoverBackground);
-        }
-        h2 {
-            margin-top: 0;
-            color: var(--vscode-foreground);
-        }
-        .file-info {
-            margin-bottom: 10px;
-            color: var(--vscode-descriptionForeground);
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h2>SVN提交</h2>
-        <div class="file-info">${this.folderPath}</div>
-        <div class="output-container" id="outputContainer"></div>
-        <div class="button-container">
-            <button id="close-button" style="display:none;">关闭</button>
-        </div>
-    </div>
-    <script>
-        (function() {
-            const vscode = acquireVsCodeApi();
-            const outputContainer = document.getElementById('outputContainer');
-            const closeButton = document.getElementById('close-button');
-            closeButton.addEventListener('click', () => {
-                vscode.postMessage({ command: 'close' });
-            });
-            window.addEventListener('message', event => {
-                const msg = event.data;
-                switch (msg.command) {
-                    case 'appendOutput':
-                        outputContainer.textContent += msg.text;
-                        outputContainer.scrollTop = outputContainer.scrollHeight;
-                        break;
-                    case 'commitComplete':
-                        closeButton.style.display = 'inline-block';
-                        break;
-                }
-            });
-        }());
-    </script>
-</body>
-</html>`;
-
-        outputPanel.webview.onDidReceiveMessage(msg => {
-            if (msg.command === 'close') {
-                outputPanel.dispose();
-            }
-        });
-
-        // 将面板移到独立窗口
-        setTimeout(() => {
-            vscode.commands.executeCommand('workbench.action.moveEditorToNewWindow').then(undefined, () => {});
-        }, 100);
-
-        return outputPanel;
-    }
-
     private async _commitFiles(files: string[], message: string) {
-        // 创建独立的提交输出面板（类似 update 面板）
-        const outputPanel = this._createCommitOutputPanel();
-
-        // 输出面板关闭时联动关闭提交面板
-        outputPanel.onDidDispose(() => {
-            try { this._panel.dispose(); } catch { /* ignore */ }
-        });
-
+        // 提交过程实时输出内嵌在提交面板自身，不再新开输出窗口
+        const webview = this._panel.webview;
         const appendOutput = (text: string) => {
-            outputPanel.webview.postMessage({ command: 'appendOutput', text });
+            webview.postMessage({ command: 'appendCommitOutput', text });
         };
 
-        // 挂载实时输出回调，将 SVN 命令的 stdout/stderr 实时流到输出面板
+        webview.postMessage({ command: 'commitStarted' });
+
+        // 挂载实时输出回调，将 SVN 命令的 stdout/stderr 实时流到面板内嵌输出区
         this.svnService.onCommandOutput = (data: string) => {
             appendOutput(data);
         };
@@ -625,12 +494,18 @@ export class SvnFolderCommitPanel {
             // 保存提交日志
             this.logStorage.addLog(message, this.folderPath);
 
+            // 后端同步移除已提交文件，保持 _fileStatuses 与列表一致
+            const committedSet = new Set(files);
+            this._fileStatuses = this._fileStatuses.filter(f => !committedSet.has(f.path));
+            // 提交成功后重置编辑态提交信息，避免重绘时复活旧内容
+            this._currentCommitMessage = '';
+
             appendOutput(`\n提交完成 (${files.length} 个文件)\n`);
-            outputPanel.webview.postMessage({ command: 'commitComplete' });
+            webview.postMessage({ command: 'commitFinished', success: true, files });
             vscode.window.showInformationMessage('文件已成功提交到SVN');
         } catch (error: any) {
             appendOutput(`\n提交失败: ${error.message}\n`);
-            outputPanel.webview.postMessage({ command: 'commitComplete' });
+            webview.postMessage({ command: 'commitFinished', success: false, files });
             vscode.window.showErrorMessage(`提交失败: ${error.message}`);
         } finally {
             // 取消实时输出回调
