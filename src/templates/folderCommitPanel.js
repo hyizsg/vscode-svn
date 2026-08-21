@@ -772,19 +772,28 @@
         });
     }
 
-    // “清空”按钮：清空内嵌提交输出内容；“关闭”按钮：关闭提交面板
+    // “复制”按钮：仅复制输出区的提交输出文本；“关闭”按钮：关闭提交面板
     function initializeOutputClear() {
-        const btn = document.getElementById('clearOutputButton');
-        if (btn) {
-            btn.addEventListener('click', () => {
+        const copyBtn = document.getElementById('copyOutputButton');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', () => {
                 const output = document.getElementById('commitOutput');
-                if (output) output.textContent = '';
+                vscode.postMessage({ command: 'copyText', text: output ? (output.textContent || '') : '' });
+                // 按钮文案短暂变为「已复制」作为反馈
+                copyBtn.textContent = '已复制';
+                setTimeout(() => { copyBtn.textContent = '复制'; }, 1500);
             });
         }
         const closeBtn = document.getElementById('commitAgainButton');
         if (closeBtn) {
             closeBtn.addEventListener('click', () => {
                 vscode.postMessage({ command: 'commitAgain' });
+            });
+        }
+        const closePanelBtn = document.getElementById('closeCommitPanelButton');
+        if (closePanelBtn) {
+            closePanelBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'closePanel' });
             });
         }
     }
@@ -875,6 +884,8 @@
         }
         const closeBtn = document.getElementById('commitAgainButton');
         if (closeBtn) closeBtn.style.display = 'inline-block';
+        const closePanelBtn = document.getElementById('closeCommitPanelButton');
+        if (closePanelBtn) closePanelBtn.style.display = 'inline-block';
         if (!success || !files || files.length === 0) return;
 
         const removeSet = new Set(files);

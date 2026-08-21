@@ -519,6 +519,7 @@ textarea {
 .commit-output-footer {
     display: flex;
     justify-content: flex-end;
+    gap: 10px;
     padding: 8px;
     border-top: 1px solid var(--vscode-panel-border);
 }
@@ -527,6 +528,18 @@ textarea {
     margin: 0;
     min-width: 96px;
     padding: 6px 16px;
+}
+
+/* 复制/关闭按钮使用次级样式，与主按钮「再次提交」区分 */
+#copyOutputButton,
+#closeCommitPanelButton {
+    background-color: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
+    color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
+}
+
+#copyOutputButton:hover,
+#closeCommitPanelButton:hover {
+    background-color: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
 }
 
 /* 提交进行中/结束后：整个面板只显示输出区与关闭按钮 */
