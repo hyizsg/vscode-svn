@@ -781,10 +781,10 @@
                 if (output) output.textContent = '';
             });
         }
-        const closeBtn = document.getElementById('closeCommitOutputButton');
+        const closeBtn = document.getElementById('commitAgainButton');
         if (closeBtn) {
             closeBtn.addEventListener('click', () => {
-                vscode.postMessage({ command: 'closePanel' });
+                vscode.postMessage({ command: 'commitAgain' });
             });
         }
     }
@@ -873,7 +873,7 @@
             submitBtn.disabled = false;
             submitBtn.textContent = '提交';
         }
-        const closeBtn = document.getElementById('closeCommitOutputButton');
+        const closeBtn = document.getElementById('commitAgainButton');
         if (closeBtn) closeBtn.style.display = 'inline-block';
         if (!success || !files || files.length === 0) return;
 

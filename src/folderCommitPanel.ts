@@ -427,6 +427,8 @@ export class SvnFolderCommitPanel {
         };
 
         webview.postMessage({ command: 'commitStarted' });
+        // 切换为输出视图时，面板标题改为「SVN提交: 文件夹名」
+        this._panel.title = `SVN提交: ${path.basename(this.folderPath)}`;
 
         // 挂载实时输出回调，将 SVN 命令的 stdout/stderr 实时流到面板内嵌输出区
         this.svnService.onCommandOutput = (data: string) => {
@@ -717,6 +719,11 @@ export class SvnFolderCommitPanel {
                         return;
                     case 'closePanel':
                         this._panel.dispose();
+                        return;
+
+                    case 'commitAgain':
+                        // 从输出视图返回提交面板：重新拉取状态并重绘
+                        await this._update();
                         return;
                 }
             },
