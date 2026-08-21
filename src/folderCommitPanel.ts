@@ -39,6 +39,9 @@ export class SvnFolderCommitPanel {
     // 用户当前编辑的提交信息（随前端输入同步），用于 webview 重载时保留，避免回退成历史日志
     private _currentCommitMessage?: string;
 
+    /** 本次提交是否被用户取消（用于区分取消与失败的提示） */
+    private _commitCancelled = false;
+
     // --- 持久化状态读写 ---
     private _getPersistentStateKey(): string {
         return `svnCommitPanel.state.${this.folderPath}`;
@@ -426,6 +429,7 @@ export class SvnFolderCommitPanel {
             webview.postMessage({ command: 'appendCommitOutput', text });
         };
 
+        this._commitCancelled = false;
         webview.postMessage({ command: 'commitStarted' });
         // 切换为输出视图时，面板标题改为「SVN提交: 文件夹名」
         this._panel.title = `SVN提交: ${path.basename(this.folderPath)}`;
@@ -506,9 +510,14 @@ export class SvnFolderCommitPanel {
             webview.postMessage({ command: 'commitFinished', success: true, files });
             vscode.window.showInformationMessage('文件已成功提交到SVN');
         } catch (error: any) {
-            appendOutput(`\n提交失败: ${error.message}\n`);
-            webview.postMessage({ command: 'commitFinished', success: false, files });
-            vscode.window.showErrorMessage(`提交失败: ${error.message}`);
+            if (this._commitCancelled) {
+                appendOutput(`\n已取消提交\n`);
+                webview.postMessage({ command: 'commitFinished', success: false, files });
+            } else {
+                appendOutput(`\n提交失败: ${error.message}\n`);
+                webview.postMessage({ command: 'commitFinished', success: false, files });
+                vscode.window.showErrorMessage(`提交失败: ${error.message}`);
+            }
         } finally {
             // 取消实时输出回调
             this.svnService.onCommandOutput = undefined;
@@ -730,6 +739,12 @@ export class SvnFolderCommitPanel {
                         // 复制提交输出内容到系统剪贴板
                         await vscode.env.clipboard.writeText(message.text || '');
                         vscode.window.showInformationMessage('提交输出已复制');
+                        return;
+
+                    case 'cancelCommit':
+                        // 取消正在执行的 SVN 提交命令
+                        this._commitCancelled = true;
+                        this.svnService.cancelCurrentCommand();
                         return;
                 }
             },

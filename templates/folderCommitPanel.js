@@ -796,6 +796,14 @@
                 vscode.postMessage({ command: 'closePanel' });
             });
         }
+        const cancelBtn = document.getElementById('cancelCommitButton');
+        if (cancelBtn) {
+            cancelBtn.addEventListener('click', () => {
+                cancelBtn.disabled = true;
+                cancelBtn.textContent = '取消中...';
+                vscode.postMessage({ command: 'cancelCommit' });
+            });
+        }
     }
 
     function updateExtensionFilter() {
@@ -860,6 +868,19 @@
         section.style.display = '';
         // 隐藏过滤区/文件列表/提交区，输出区撑满整个面板
         document.body.classList.add('committing');
+        // 提交中只显示「取消」：隐藏复制/再次提交/关闭
+        const copyBtn = document.getElementById('copyOutputButton');
+        if (copyBtn) copyBtn.style.display = 'none';
+        const againBtn = document.getElementById('commitAgainButton');
+        if (againBtn) againBtn.style.display = 'none';
+        const closeBtn = document.getElementById('closeCommitPanelButton');
+        if (closeBtn) closeBtn.style.display = 'none';
+        const cancelBtn = document.getElementById('cancelCommitButton');
+        if (cancelBtn) {
+            cancelBtn.style.display = 'inline-block';
+            cancelBtn.disabled = false;
+            cancelBtn.textContent = '取消';
+        }
         const submitBtn = document.getElementById('submitButton');
         if (submitBtn) {
             submitBtn.disabled = true;
@@ -875,15 +896,19 @@
         output.scrollTop = output.scrollHeight;
     }
 
-    // 提交结束：恢复按钮并显示关闭按钮；成功时从列表移除已提交文件并清空提交信息
+    // 提交结束：隐藏取消，显示复制/再次提交/关闭
     function onCommitFinished(success, files) {
         const submitBtn = document.getElementById('submitButton');
         if (submitBtn) {
             submitBtn.disabled = false;
             submitBtn.textContent = '提交';
         }
-        const closeBtn = document.getElementById('commitAgainButton');
-        if (closeBtn) closeBtn.style.display = 'inline-block';
+        const cancelBtn = document.getElementById('cancelCommitButton');
+        if (cancelBtn) cancelBtn.style.display = 'none';
+        const copyBtn = document.getElementById('copyOutputButton');
+        if (copyBtn) copyBtn.style.display = 'inline-block';
+        const againBtn = document.getElementById('commitAgainButton');
+        if (againBtn) againBtn.style.display = 'inline-block';
         const closePanelBtn = document.getElementById('closeCommitPanelButton');
         if (closePanelBtn) closePanelBtn.style.display = 'inline-block';
         if (!success || !files || files.length === 0) return;

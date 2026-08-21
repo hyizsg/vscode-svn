@@ -57,6 +57,50 @@ export class SvnService {
   /** 实时命令输出回调，外部可设置以接收 stdout/stderr 流式数据 */
   public onCommandOutput?: (data: string) => void;
 
+  /** 当前正在执行的 SVN 子进程（用于取消命令） */
+  private _activeProcess?: cp.ChildProcess;
+
+  /**
+   * 取消当前正在执行的 SVN 命令
+   * cp.exec 会先起一个 shell 再 fork 出 svn 子进程，仅 kill shell 会留下孤儿 svn，
+   * 因此先 pkill 掉 shell 的子进程（真正的 svn），再 kill shell 本身；
+   * Windows 下用 taskkill /t 杀进程树
+   */
+  public cancelCurrentCommand(): void {
+    const proc = this._activeProcess;
+    if (!proc) {
+      return;
+    }
+    this._activeProcess = undefined;
+    const pid = proc.pid;
+    if (pid === undefined) {
+      return;
+    }
+
+    let exited = false;
+    proc.once('exit', () => { exited = true; });
+
+    const killTree = (sig: 'TERM' | 'KILL') => {
+      if (process.platform === 'win32') {
+        try {
+          cp.execSync(`taskkill /pid ${pid} /t ${sig === 'KILL' ? '/f' : ''}`.trim(), { stdio: 'ignore', windowsHide: true });
+        } catch { /* 进程树可能已退出 */ }
+        return;
+      }
+      // 先杀 shell 的子进程（svn），再杀 shell 本身（process.kill 需 SIG 前缀）
+      try { cp.execSync(`pkill -${sig} -P ${pid}`, { stdio: 'ignore' }); } catch { /* 无子进程或已退出 */ }
+      try { process.kill(pid, (`SIG${sig}` as NodeJS.Signals)); } catch { /* 进程可能已退出 */ }
+    };
+
+    killTree('TERM');
+    // 1 秒后仍未退出则强制 kill
+    setTimeout(() => {
+      if (!exited) {
+        killTree('KILL');
+      }
+    }, 1000);
+  }
+
   constructor(context?: vscode.ExtensionContext) {
     this.outputChannel = vscode.window.createOutputChannel('SVN');
     this.filterService = new SvnFilterService();
@@ -435,6 +479,16 @@ export class SvnService {
           }
         }
       );
+      
+      // 记录活动进程以供取消，进程退出后自动清理
+      this._activeProcess = svnProcess;
+      const clearActive = () => {
+        if (this._activeProcess === svnProcess) {
+          this._activeProcess = undefined;
+        }
+      };
+      svnProcess.on('exit', clearActive);
+      svnProcess.on('error', clearActive);
       
       // 处理实时输出
       if (svnProcess.stdout) {
