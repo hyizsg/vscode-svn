@@ -530,15 +530,15 @@ textarea {
     padding: 6px 16px;
 }
 
-/* 复制/关闭按钮使用次级样式，与主按钮「再次提交」区分 */
+/* 复制/再次提交按钮使用次级样式，主按钮为「关闭」 */
 #copyOutputButton,
-#closeCommitPanelButton {
+#commitAgainButton {
     background-color: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
     color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
 }
 
 #copyOutputButton:hover,
-#closeCommitPanelButton:hover {
+#commitAgainButton:hover {
     background-color: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
 }
 
