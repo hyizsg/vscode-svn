@@ -516,6 +516,39 @@ textarea {
     font-size: 12px;
 }
 
+.commit-output-footer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 8px;
+    border-top: 1px solid var(--vscode-panel-border);
+}
+
+.commit-output-footer button {
+    margin: 0;
+    min-width: 96px;
+    padding: 6px 16px;
+}
+
+/* 提交进行中/结束后：整个面板只显示输出区与关闭按钮 */
+body.committing .filter-section,
+body.committing .file-list-container,
+body.committing .commit-section {
+    display: none;
+}
+
+body.committing #commitOutputSection {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    margin-bottom: 0;
+}
+
+body.committing .commit-output {
+    flex: 1;
+    max-height: none;
+}
+
 /* 提交确认弹框 */
 .commit-confirm-overlay {
     position: fixed;

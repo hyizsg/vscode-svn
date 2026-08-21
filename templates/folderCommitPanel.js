@@ -772,14 +772,21 @@
         });
     }
 
-    // “清空”按钮：清空内嵌提交输出内容
+    // “清空”按钮：清空内嵌提交输出内容；“关闭”按钮：关闭提交面板
     function initializeOutputClear() {
         const btn = document.getElementById('clearOutputButton');
-        if (!btn) return;
-        btn.addEventListener('click', () => {
-            const output = document.getElementById('commitOutput');
-            if (output) output.textContent = '';
-        });
+        if (btn) {
+            btn.addEventListener('click', () => {
+                const output = document.getElementById('commitOutput');
+                if (output) output.textContent = '';
+            });
+        }
+        const closeBtn = document.getElementById('closeCommitOutputButton');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'closePanel' });
+            });
+        }
     }
 
     function updateExtensionFilter() {
@@ -835,13 +842,15 @@
         }
     });
 
-    // 提交开始：显示内嵌输出区并禁用提交按钮
+    // 提交开始：整个面板切换为只显示输出区，并禁用提交按钮
     function showCommitOutput() {
         const section = document.getElementById('commitOutputSection');
         const output = document.getElementById('commitOutput');
         if (!section || !output) return;
         output.textContent = '';
         section.style.display = '';
+        // 隐藏过滤区/文件列表/提交区，输出区撑满整个面板
+        document.body.classList.add('committing');
         const submitBtn = document.getElementById('submitButton');
         if (submitBtn) {
             submitBtn.disabled = true;
@@ -857,13 +866,15 @@
         output.scrollTop = output.scrollHeight;
     }
 
-    // 提交结束：恢复按钮；成功时从列表移除已提交文件并清空提交信息
+    // 提交结束：恢复按钮并显示关闭按钮；成功时从列表移除已提交文件并清空提交信息
     function onCommitFinished(success, files) {
         const submitBtn = document.getElementById('submitButton');
         if (submitBtn) {
             submitBtn.disabled = false;
             submitBtn.textContent = '提交';
         }
+        const closeBtn = document.getElementById('closeCommitOutputButton');
+        if (closeBtn) closeBtn.style.display = 'inline-block';
         if (!success || !files || files.length === 0) return;
 
         const removeSet = new Set(files);
