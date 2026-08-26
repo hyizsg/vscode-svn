@@ -24,6 +24,8 @@ export interface ConflictFile {
   displayName: string;
   conflictType: 'text' | 'tree' | 'property';
   status: string;
+  /** 本地节点是否处于删除/缺失状态（树冲突时决定 resolve --accept=working 会保留删除） */
+  localDeleted?: boolean;
 }
 
 /**
@@ -2967,7 +2969,8 @@ export class SvnService {
             path: path.resolve(workingDir, filePath),
             displayName: filePath,
             conflictType,
-            status: 'C'
+            status: 'C',
+            localDeleted: textStatus === 'D' || textStatus === '!'
           });
         }
       }

@@ -86,7 +86,7 @@ export class SvnUpdatePanel {
       const list = await this.svnService.getMergeConflicts(baseDir);
       this.panel.webview.postMessage({
         command: 'conflictsUpdated',
-        conflicts: list.map(c => ({ path: c.path, displayName: c.displayName, conflictType: c.conflictType })),
+        conflicts: list.map(c => ({ path: c.path, displayName: c.displayName, conflictType: c.conflictType, localDeleted: c.localDeleted === true })),
         ...(extra || {})
       });
     } catch (err: any) {
@@ -496,6 +496,26 @@ export class SvnUpdatePanel {
           background: var(--vscode-badge-background);
           color: var(--vscode-badge-foreground);
         }
+        .conflict-type-tag.local-deleted {
+          background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+          color: var(--vscode-errorForeground);
+        }
+        .cf-confirm {
+          width: 100%;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex-wrap: wrap;
+          font-size: 12px;
+          color: var(--vscode-errorForeground);
+          padding: 4px 8px;
+        }
+        .cf-confirm button {
+          min-width: auto;
+          height: auto;
+          padding: 3px 8px;
+          font-size: 12px;
+        }
         .conflict-buttons { display: flex; gap: 4px; flex-wrap: wrap; }
         .conflict-buttons button {
           min-width: auto;
@@ -532,6 +552,7 @@ export class SvnUpdatePanel {
             <div class="conflicts-batch">
               <button id="resolveAllMineBtn" class="secondary">全部使用本地</button>
               <button id="resolveAllTheirsBtn" class="secondary">全部使用合并方</button>
+              <button id="resolveAllWorkingBtn" class="secondary">全部标记已解决</button>
               <button id="refreshConflictsBtn" class="secondary">重新检测</button>
             </div>
           </div>
@@ -561,6 +582,7 @@ export class SvnUpdatePanel {
           const resolveProgressEl = document.getElementById('resolveProgress');
           const resolveAllMineBtn = document.getElementById('resolveAllMineBtn');
           const resolveAllTheirsBtn = document.getElementById('resolveAllTheirsBtn');
+          const resolveAllWorkingBtn = document.getElementById('resolveAllWorkingBtn');
           const refreshConflictsBtn = document.getElementById('refreshConflictsBtn');
 
           function escapeHtml(s) {
@@ -572,6 +594,7 @@ export class SvnUpdatePanel {
           function setBatchDisabled(disabled) {
             resolveAllMineBtn.disabled = disabled;
             resolveAllTheirsBtn.disabled = disabled;
+            resolveAllWorkingBtn.disabled = disabled;
             refreshConflictsBtn.disabled = disabled;
           }
           function renderConflicts(conflicts) {
@@ -583,8 +606,8 @@ export class SvnUpdatePanel {
             conflictsEl.style.display = '';
             conflictCountEl.textContent = conflicts.length;
             conflictListEl.innerHTML = conflicts.map(c =>
-              '<div class="conflict-item" data-path="' + escapeHtml(c.path) + '">' +
-                '<div class="conflict-meta"><span class="conflict-type-tag">' + escapeHtml(typeLabel(c.conflictType)) + '</span>' + escapeHtml(c.displayName) + '</div>' +
+              '<div class="conflict-item" data-path="' + escapeHtml(c.path) + '"' + (c.localDeleted ? ' data-local-deleted="1"' : '') + '>' +
+                '<div class="conflict-meta"><span class="conflict-type-tag">' + escapeHtml(typeLabel(c.conflictType)) + '</span>' + (c.localDeleted ? '<span class="conflict-type-tag local-deleted">本地已删除</span>' : '') + escapeHtml(c.displayName) + '</div>' +
                 '<div class="conflict-buttons">' +
                   '<button class="cf-merge-btn" title="打开三向合并编辑器手动修改冲突">编辑冲突</button>' +
                   '<button class="cf-btn" data-action="working" title="将当前工作副本（已去除冲突标记）标记为已解决">标记已解决</button>' +
@@ -593,14 +616,28 @@ export class SvnUpdatePanel {
                 '</div>' +
               '</div>'
             ).join('');
+            function doResolve(item, action) {
+              const filePath = item.getAttribute('data-path');
+              item.querySelectorAll('.cf-btn').forEach(b => b.disabled = true);
+              item.classList.add('resolving');
+              vscode.postMessage({ command: 'resolveConflict', filePath: filePath, resolution: action });
+            }
             conflictListEl.querySelectorAll('.cf-btn').forEach(btn => {
               btn.addEventListener('click', () => {
                 const item = btn.closest('.conflict-item');
-                const filePath = item.getAttribute('data-path');
                 const action = btn.getAttribute('data-action');
-                item.querySelectorAll('.cf-btn').forEach(b => b.disabled = true);
-                item.classList.add('resolving');
-                vscode.postMessage({ command: 'resolveConflict', filePath: filePath, resolution: action });
+                // 本地已删除的树冲突：标记已解决(working)会保留删除，需先明确确认
+                if (action === 'working' && item.getAttribute('data-local-deleted') === '1' && !item.querySelector('.cf-confirm')) {
+                  const confirmDiv = document.createElement('div');
+                  confirmDiv.className = 'cf-confirm';
+                  confirmDiv.innerHTML = '该文件处于本地删除状态：标记已解决会保留删除（提交面板显示为已删除）；如需保留文件请用「使用合并方」。' +
+                    '<button class="cf-confirm-ok">保留删除并解决</button><button class="secondary cf-confirm-cancel">取消</button>';
+                  confirmDiv.querySelector('.cf-confirm-ok').addEventListener('click', () => doResolve(item, action));
+                  confirmDiv.querySelector('.cf-confirm-cancel').addEventListener('click', () => confirmDiv.remove());
+                  item.appendChild(confirmDiv);
+                  return;
+                }
+                doResolve(item, action);
               });
             });
             conflictListEl.querySelectorAll('.cf-merge-btn').forEach(btn => {
@@ -639,6 +676,12 @@ export class SvnUpdatePanel {
             resolveProgressEl.style.display = '';
             resolveProgressEl.textContent = '正在批量解决...';
             vscode.postMessage({ command: 'resolveAllConflicts', resolution: 'theirs-full' });
+          });
+          resolveAllWorkingBtn.addEventListener('click', () => {
+            setBatchDisabled(true);
+            resolveProgressEl.style.display = '';
+            resolveProgressEl.textContent = '正在批量解决...';
+            vscode.postMessage({ command: 'resolveAllConflicts', resolution: 'working' });
           });
           refreshConflictsBtn.addEventListener('click', () => {
             setBatchDisabled(true);
