@@ -256,7 +256,7 @@ export class SvnFolderCommitPanel {
                     }
             
                     // SVN status 输出格式：
-                    // 第1列：文件状态 (M:修改, A:新增, D:删除, ?:未版本控制, C:冲突, !:丢失等)
+                    // 第1列：文件状态 (M:修改, A:新增, D:删除, R:替换, ?:未版本控制, C:冲突, !:丢失等)
                     // 第2列：属性状态
                     // 第3列：锁定状态
                     // 第4列：历史标记（+表示有copy历史）
@@ -288,6 +288,11 @@ export class SvnFolderCommitPanel {
                             break;
                         case 'C':
                             type = 'conflict';
+                            break;
+                        case 'R':
+                            // replaced（删除+新增已调度）仍是已版本控制文件，
+                            // 按 modified 归类走正常提交流程，绝不能当未版本控制去 add
+                            type = 'modified';
                             break;
                         case '!':
                             type = 'missing';
