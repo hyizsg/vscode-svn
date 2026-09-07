@@ -63,6 +63,22 @@ export class SvnService {
   private _activeProcess?: cp.ChildProcess;
 
   /**
+   * 判断文件是否已纳入版本控制（svn info 成功即 WC 中存在该节点）。
+   * 用于区分「已版本控制且干净」与「未版本控制/不在工作副本」这两种 status 为空的场景
+   */
+  public async isFileVersioned(filePath: string): Promise<boolean> {
+    const dir = path.dirname(filePath);
+    const fileName = path.basename(filePath);
+    const escaped = fileName.includes('@') ? `${fileName}@` : fileName;
+    try {
+      await this.executeSvnCommand(`info "${escaped}"`, dir);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * 取消当前正在执行的 SVN 命令
    * cp.exec 会先起一个 shell 再 fork 出 svn 子进程，仅 kill shell 会留下孤儿 svn，
    * 因此先 pkill 掉 shell 的子进程（真正的 svn），再 kill shell 本身；

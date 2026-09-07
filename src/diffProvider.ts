@@ -435,6 +435,23 @@ export class SvnDiffProvider {
     this.outputChannel.appendLine(`\n[showDiff] 开始显示文件差异: ${filePath}`);
     
     try {
+      // 状态为空有两种含义：已版本控制且干净 / 节点不在工作副本（未版本控制，如 svn status 报 W155010）。
+      // 后者无 BASE 可对比，需给出准确提示而不是「没有修改」
+      let status = '';
+      try {
+        status = await this.svnService.getFileStatus(filePath);
+      } catch (statusError: any) {
+        this.outputChannel.appendLine(`[showDiff] 获取状态失败: ${statusError.message}`);
+      }
+      if (!status) {
+        const versioned = await this.svnService.isFileVersioned(filePath);
+        this.outputChannel.appendLine(`[showDiff] 状态为空，svn info 探测是否已版本控制: ${versioned}`);
+        if (!versioned) {
+          vscode.window.showWarningMessage(`文件未纳入版本控制（工作副本中无此节点），无 BASE 版本可对比：${path.basename(filePath)}`);
+          return false;
+        }
+      }
+
       // 检查文件是否有修改
       this.outputChannel.appendLine(`[showDiff] 检查文件是否有修改...`);
       const hasChanges = await this.hasChanges(filePath);
