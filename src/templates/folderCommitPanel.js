@@ -228,6 +228,14 @@
         // 提交按钮
         document.getElementById('submitButton').addEventListener('click', submitCommit);
         document.getElementById('generateAIButton').addEventListener('click', generateAILog);
+        document.getElementById('refreshButton').addEventListener('click', () => {
+            const commitMessage = document.getElementById('commitMessage');
+            saveState();
+            vscode.postMessage({
+                command: 'refreshPanel',
+                message: commitMessage ? commitMessage.value : ''
+            });
+        });
 
         // 提交信息输入同步到扩展端（用于 revert 等重绘时保留用户已编辑的内容）
         const commitMessageEl = document.getElementById('commitMessage');

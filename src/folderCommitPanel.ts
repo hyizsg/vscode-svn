@@ -740,6 +740,13 @@ export class SvnFolderCommitPanel {
                         await this._update();
                         return;
 
+                    case 'refreshPanel':
+                        this._currentCommitMessage = typeof message.message === 'string'
+                            ? message.message
+                            : this._currentCommitMessage;
+                        await this._update();
+                        return;
+
                     case 'copyText':
                         // 复制提交输出内容到系统剪贴板
                         await vscode.env.clipboard.writeText(message.text || '');
