@@ -229,7 +229,10 @@
         document.getElementById('submitButton').addEventListener('click', submitCommit);
         document.getElementById('generateAIButton').addEventListener('click', generateAILog);
         document.getElementById('refreshButton').addEventListener('click', () => {
+            const refreshButton = document.getElementById('refreshButton');
             const commitMessage = document.getElementById('commitMessage');
+            refreshButton.classList.add('is-refreshing');
+            refreshButton.disabled = true;
             saveState();
             vscode.postMessage({
                 command: 'refreshPanel',

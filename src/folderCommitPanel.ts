@@ -81,7 +81,7 @@ export class SvnFolderCommitPanel {
         this.templateManager = new TemplateManager(extensionUri);
         this.outputChannel = vscode.window.createOutputChannel('SVN 文件夹提交');
         
-        this._update();
+        this._update(true);
 
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
         this._setupMessageHandlers();
@@ -160,9 +160,13 @@ export class SvnFolderCommitPanel {
         }
     }
 
-    private async _update() {
+    private async _update(showInitialLoading = false) {
         const webview = this._panel.webview;
         this._panel.title = `提交文件夹到SVN: ${path.basename(this.folderPath)}`;
+
+        if (showInitialLoading) {
+            webview.html = await this._getHtmlForWebview(true);
+        }
         
         // 获取文件状态
         await this._updateFileStatuses();
@@ -1075,7 +1079,7 @@ export class SvnFolderCommitPanel {
         return finalMessage;
     }
 
-    private async _getHtmlForWebview(): Promise<string> {
+    private async _getHtmlForWebview(isLoading = false): Promise<string> {
         try {
             // 准备模板变量
             const templateVariables = {
@@ -1083,7 +1087,9 @@ export class SvnFolderCommitPanel {
                 CHANGELIST_CHECKBOXES: this._renderChangelistCheckboxes(this._fileStatuses),
                 FILE_LIST: this._renderFileList(this._fileStatuses),
                 PREFIX_OPTIONS: this._renderHistoryOptions(),
-                LAST_COMMIT_MESSAGE: this._getCommitMessageForHtml()
+                LAST_COMMIT_MESSAGE: this._getCommitMessageForHtml(),
+                REFRESHING_CLASS: isLoading ? 'is-refreshing' : '',
+                REFRESHING_DISABLED: isLoading ? 'disabled' : ''
             };
 
             // 使用内联模板（CSS 和 JS 内嵌在 HTML 中）
