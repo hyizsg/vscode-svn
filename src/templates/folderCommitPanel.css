@@ -236,6 +236,12 @@ body {
     max-width: 250px;
 }
 
+#refreshButton,
+#submitButton {
+    min-width: 100px;
+    padding: 6px 16px;
+}
+
 #refreshButton {
     margin-left: auto;
     background-color: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
@@ -244,11 +250,6 @@ body {
 
 #refreshButton:hover {
     background-color: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
-}
-
-#submitButton {
-    min-width: 100px;
-    padding: 6px 16px;
 }
 
 button {
