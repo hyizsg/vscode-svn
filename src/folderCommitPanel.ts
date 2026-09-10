@@ -165,7 +165,7 @@ export class SvnFolderCommitPanel {
         this._panel.title = `提交文件夹到SVN: ${path.basename(this.folderPath)}`;
 
         if (showInitialLoading) {
-            webview.html = this._getInitialLoadingHtml();
+            webview.html = await this._getHtmlForWebview(true);
         }
         
         // 获取文件状态
@@ -173,25 +173,6 @@ export class SvnFolderCommitPanel {
         
         // 生成HTML
         webview.html = await this._getHtmlForWebview();
-    }
-
-    private _getInitialLoadingHtml(): string {
-        return `<!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8">
-                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
-                <style>
-                    body { align-items: center; background: var(--vscode-editor-background); color: var(--vscode-foreground); display: flex; font-family: var(--vscode-font-family); height: 100vh; justify-content: center; margin: 0; }
-                    button { align-items: center; background: var(--vscode-button-secondaryBackground, var(--vscode-button-background)); border: none; color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground)); display: flex; min-width: 100px; padding: 6px 16px; }
-                    .spinner { animation: refresh-spin 0.8s linear infinite; border: 2px solid currentColor; border-radius: 50%; border-right-color: transparent; height: 12px; margin-right: 6px; width: 12px; }
-                    @keyframes refresh-spin { to { transform: rotate(360deg); } }
-                </style>
-            </head>
-            <body>
-                <button disabled><span class="spinner"></span>刷新</button>
-            </body>
-            </html>`;
     }
 
     private _getFilterInfo(): { totalFiles: number, filteredFiles: number, excludedFiles: number } {
@@ -1102,7 +1083,7 @@ export class SvnFolderCommitPanel {
         return finalMessage;
     }
 
-    private async _getHtmlForWebview(): Promise<string> {
+    private async _getHtmlForWebview(isLoading = false): Promise<string> {
         try {
             // 准备模板变量
             const templateVariables = {
@@ -1110,7 +1091,9 @@ export class SvnFolderCommitPanel {
                 CHANGELIST_CHECKBOXES: this._renderChangelistCheckboxes(this._fileStatuses),
                 FILE_LIST: this._renderFileList(this._fileStatuses),
                 PREFIX_OPTIONS: this._renderHistoryOptions(),
-                LAST_COMMIT_MESSAGE: this._getCommitMessageForHtml()
+                LAST_COMMIT_MESSAGE: this._getCommitMessageForHtml(),
+                REFRESHING_CLASS: isLoading ? 'is-refreshing' : '',
+                REFRESHING_DISABLED: isLoading ? 'disabled' : ''
             };
 
             // 使用内联模板（CSS 和 JS 内嵌在 HTML 中）
