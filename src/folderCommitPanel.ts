@@ -748,7 +748,11 @@ export class SvnFolderCommitPanel {
                         this._currentCommitMessage = typeof message.message === 'string'
                             ? message.message
                             : this._currentCommitMessage;
-                        await this._update();
+                        try {
+                            await this._update();
+                        } finally {
+                            void this._panel.webview.postMessage({ command: 'refreshFinished' });
+                        }
                         return;
 
                     case 'copyText':

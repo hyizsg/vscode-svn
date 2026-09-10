@@ -208,6 +208,14 @@
         // 已移除，保留空函数避免报错
     }
     
+    function setRefreshLoading(isRefreshing) {
+        const refreshButton = document.getElementById('refreshButton');
+        if (!refreshButton) return;
+
+        refreshButton.classList.toggle('is-refreshing', isRefreshing);
+        refreshButton.disabled = isRefreshing;
+    }
+
     function initializeEventListeners() {
         // 类型过滤复选框
         document.getElementById('modified-checkbox').addEventListener('change', () => toggleFileType('modified'));
@@ -229,10 +237,8 @@
         document.getElementById('submitButton').addEventListener('click', submitCommit);
         document.getElementById('generateAIButton').addEventListener('click', generateAILog);
         document.getElementById('refreshButton').addEventListener('click', () => {
-            const refreshButton = document.getElementById('refreshButton');
             const commitMessage = document.getElementById('commitMessage');
-            refreshButton.classList.add('is-refreshing');
-            refreshButton.disabled = true;
+            setRefreshLoading(true);
             saveState();
             vscode.postMessage({
                 command: 'refreshPanel',
@@ -857,6 +863,9 @@
                     aiButton.disabled = false;
                     aiButton.textContent = '使用AI生成提交日志';
                 }
+                break;
+            case 'refreshFinished':
+                setRefreshLoading(false);
                 break;
             case 'commitStarted':
                 showCommitOutput();
