@@ -497,14 +497,25 @@ export class SvnFolderCommitPanel {
                 }
             }));
 
-            const directories = fileEntries.filter(entry => entry.isDirectory).map(entry => entry.path);
+            const unversionedSet = new Set(unversionedFiles);
+            const addedDirectories = fileEntries
+                .filter(entry => entry.isDirectory && unversionedSet.has(entry.path))
+                .map(entry => entry.path);
+
+            // 提交统一使用 --depth empty（见 SvnService.commitFiles），因此新 add 的目录必须把
+            // 内部条目显式列出，否则只会提交一个空目录
+            const commitTargets = new Set(files);
+            for (const directory of addedDirectories) {
+                const entries = await this._collectAddedEntries(directory);
+                entries.forEach(entry => commitTargets.add(entry));
+            }
 
             // 执行提交
             // 注意：此处必须按勾选的文件路径逐个提交，不能因为“所有勾选文件恰好在同一个 changelist”
             // 而改用 svn commit --changelist：--changelist 会提交该 changelist 下的全部文件，
             // 导致用户未勾选的文件也被一并提交（且会绕过过滤器）。
             appendOutput(`正在执行 SVN 提交...\n`);
-            await this.svnService.commitFiles(files, message, this.folderPath);
+            await this.svnService.commitFiles(Array.from(commitTargets), message, this.folderPath);
 
             // 保存提交日志
             this.logStorage.addLog(message, this.folderPath);
@@ -1384,6 +1395,25 @@ export class SvnFolderCommitPanel {
                 return `<div>${line}</div>`;
             })
             .join('');
+    }
+
+    /**
+     * 收集刚 svn add 的目录下处于新增状态的条目，作为显式提交目标
+     * @param directory 已 add 的目录绝对路径
+     */
+    private async _collectAddedEntries(directory: string): Promise<string[]> {
+        const output = await this.svnService.executeSvnCommand(`status --depth infinity "${directory}"`, this.folderPath);
+        const entries: string[] = [];
+        output.split(/\r?\n/).forEach(line => {
+            if (line.charAt(0) !== 'A') {
+                return;
+            }
+            const target = line.substring(8).trim();
+            if (target) {
+                entries.push(path.resolve(this.folderPath, target));
+            }
+        });
+        return entries;
     }
 
     /**

@@ -1590,8 +1590,10 @@ export class SvnService {
       this.outputChannel.appendLine(`工作目录: ${workingDir}`);
       
       // 执行提交命令
+      // --depth empty：svn commit 对目录目标默认按 infinity 递归，会把目录下未勾选的修改
+      // （例如合并后仅 mergeinfo 变更的目录，其内部其它 changelist 的文件）一并提交
       this.outputChannel.appendLine('正在提交文件...');
-      const result = await this.executeSvnCommand(`commit ${fileArgs} -m "${message}"`, workingDir);
+      const result = await this.executeSvnCommand(`commit --depth empty ${fileArgs} -m "${message}"`, workingDir);
       this.outputChannel.appendLine(result);
       
       this.outputChannel.appendLine('========== SVN批量提交操作完成 ==========');
