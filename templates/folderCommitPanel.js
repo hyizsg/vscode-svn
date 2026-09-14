@@ -957,8 +957,11 @@
 
     // 页面加载完成后初始化
     document.addEventListener('DOMContentLoaded', () => {
-        // 启动时过滤掉 DOM 中已不存在的文件路径（防止删除文件后旧的 selectedFiles/uncheckedFiles
+        // 启动时过滤掉 DOM 中已不存在的文件路径（防止删除文件后旧的 selectedFiles
         // 残留幽灵路径，导致提交时将不存在的文件传给 svn commit 报错）
+        // 注意：不要在这里清理 uncheckedFiles。首次渲染发生在 svn status 扫描之前，
+        // 文件列表为空，会把用户手动取消勾选的记录整体误判为幽灵路径并清空持久化状态。
+        // uncheckedFiles 的清理由扩展端按真实 svn status 结果进行。
         const domPaths = new Set(
             Array.from(document.querySelectorAll('.file-item'))
                 .map(item => item.getAttribute('data-path'))
@@ -968,12 +971,8 @@
         Array.from(selectedFiles).forEach(p => {
             if (!domPaths.has(p)) { selectedFiles.delete(p); __purged = true; }
         });
-        Array.from(uncheckedFiles).forEach(p => {
-            if (!domPaths.has(p)) { uncheckedFiles.delete(p); __purged = true; }
-        });
         if (__purged) {
             saveState();
-            syncPersistentState();
         }
 
         initializeEventListeners();
