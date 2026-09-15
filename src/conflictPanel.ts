@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import { SvnService, ConflictFile } from './svnService';
 import { TemplateManager } from './templateManager';
+import { getOutputChannel } from './outputChannel';
 
 /**
  * SVN冲突处理面板
@@ -24,7 +25,7 @@ export class SvnConflictPanel {
     ) {
         this._panel = panel;
         this.templateManager = new TemplateManager(extensionUri);
-        this.outputChannel = vscode.window.createOutputChannel('SVN冲突处理');
+        this.outputChannel = getOutputChannel();
         
         // 设置初始状态
         this._update('scanning');

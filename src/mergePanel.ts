@@ -3,6 +3,7 @@ import * as path from 'path';
 import { SvnService } from './svnService';
 import { TemplateManager } from './templateManager';
 import { CommitLogStorage } from './commitLogStorage';
+import { getOutputChannel } from './outputChannel';
 
 /**
  * SVN 分支合并面板
@@ -76,7 +77,7 @@ export class SvnMergePanel {
         this.folderPath = folderPath;
         this.logStorage = logStorage;
         this.templateManager = new TemplateManager(context.extensionUri);
-        this.outputChannel = vscode.window.createOutputChannel('SVN Merge');
+        this.outputChannel = getOutputChannel();
 
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
         this._setupMessageHandlers();

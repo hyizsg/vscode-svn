@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as https from 'https';
 import * as http from 'http'
+import { getOutputChannel } from './outputChannel';
 
 /**
  * AI服务类，用于生成SVN提交日志
@@ -8,10 +9,10 @@ import * as http from 'http'
  * 回退到用户自行配置的 AI 服务
  */
 export class AiService {
-  private outputChannel: vscode.OutputChannel;
+  private readonly outputChannel: vscode.OutputChannel;
 
   constructor() {
-    this.outputChannel = vscode.window.createOutputChannel('SVN AI 生成提交日志');
+    this.outputChannel = getOutputChannel();
   }
 
   /**

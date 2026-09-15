@@ -7,6 +7,7 @@ import { promisify } from 'util';
 import { SvnFilterService } from './filterService';
 import { SvnAuthService } from './svnAuthService';
 import { SvnAuthDialog } from './svnAuthDialog';
+import { getOutputChannel } from './outputChannel';
 
 const exec = promisify(cp.exec);
 const fsExists = promisify(fs.exists);
@@ -120,7 +121,7 @@ export class SvnService {
   }
 
   constructor(context?: vscode.ExtensionContext) {
-    this.outputChannel = vscode.window.createOutputChannel('SVN');
+    this.outputChannel = getOutputChannel();
     this.filterService = new SvnFilterService();
     if (context) {
       this.authService = new SvnAuthService(context);

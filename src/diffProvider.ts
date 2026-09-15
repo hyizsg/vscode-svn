@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as cp from 'child_process';
 import { SvnService } from './svnService';
+import { getOutputChannel } from './outputChannel';
 
 /**
  * SVN差异提供器，处理文件差异的显示和编码问题
@@ -12,7 +13,7 @@ export class SvnDiffProvider {
 
   constructor(svnService: SvnService) {
     this.svnService = svnService;
-    this.outputChannel = vscode.window.createOutputChannel('SVN差异');
+    this.outputChannel = getOutputChannel();
   }
 
   /**

@@ -6,6 +6,7 @@ import { SvnService } from './svnService';
 import { TemplateManager } from './templateManager';
 import { AiService } from './aiService';
 import { AiCacheService } from './aiCacheService';
+import { getOutputChannel } from './outputChannel';
 
 /**
  * SVN日志条目接口
@@ -107,7 +108,7 @@ export class SvnLogPanel {
     ) {
         this._panel = panel;
         this._targetPath = targetPath;
-        this._outputChannel = vscode.window.createOutputChannel('SVN日志面板');
+        this._outputChannel = getOutputChannel();
         this.templateManager = new TemplateManager(extensionUri);
         this.aiService = new AiService();
         this.aiCacheService = AiCacheService.getInstance();
@@ -2831,9 +2832,6 @@ export class SvnLogPanel {
                 disposable.dispose();
             }
         }
-        
-        // 释放输出通道
-        this._outputChannel.dispose();
         
         // 释放缓存服务
         this.aiCacheService.dispose();

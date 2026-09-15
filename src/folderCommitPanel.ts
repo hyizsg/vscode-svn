@@ -7,6 +7,7 @@ import { TemplateManager } from './templateManager';
 import * as path from 'path';
 import * as fs from 'fs';
 import { AiService } from './aiService';
+import { getOutputChannel } from './outputChannel';
 
 interface FileStatus {
     path: string;
@@ -79,7 +80,7 @@ export class SvnFolderCommitPanel {
         this.aiService = new AiService();
         this.filterService = new SvnFilterService();
         this.templateManager = new TemplateManager(extensionUri);
-        this.outputChannel = vscode.window.createOutputChannel('SVN 文件夹提交');
+        this.outputChannel = getOutputChannel();
         
         this._update(true);
 

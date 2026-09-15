@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { getOutputChannel } from './outputChannel';
 
 /**
  * AI分析缓存条目接口
@@ -31,7 +32,7 @@ export class AiCacheService {
     private outputChannel: vscode.OutputChannel;
 
     private constructor() {
-        this.outputChannel = vscode.window.createOutputChannel('SVN AI 缓存服务');
+        this.outputChannel = getOutputChannel();
         this._ensureCacheDir();
         this._loadCache();
     }
@@ -52,7 +53,6 @@ export class AiCacheService {
     public static destroyInstance(): void {
         if (AiCacheService.instance) {
             AiCacheService.instance._saveCache();
-            AiCacheService.instance.outputChannel.dispose();
             AiCacheService.instance = null;
         }
     }
