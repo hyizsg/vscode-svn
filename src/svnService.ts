@@ -954,6 +954,29 @@ export class SvnService {
   }
 
   /**
+   * 把提交信息写入临时文件，返回 svn 命令行参数片段
+   * 提交信息经 shell 拼接会破坏 \ " $ ` 及换行，故统一改用 -F 从文件读取
+   * @param message 提交信息
+   */
+  private async createCommitMessageArgs(message: string): Promise<{ args: string; file: string }> {
+    const file = path.join(os.tmpdir(), `svn-commit-msg-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+    await fs.promises.writeFile(file, message, 'utf8');
+    return { args: `--encoding UTF-8 -F "${file}"`, file };
+  }
+
+  /**
+   * 清理提交信息临时文件
+   * @param file 临时文件路径
+   */
+  private async cleanupCommitMessageFile(file: string): Promise<void> {
+    try {
+      await fs.promises.unlink(file);
+    } catch {
+      /* 临时文件清理失败不影响提交结果 */
+    }
+  }
+
+  /**
    * 提交文件或文件夹
    * @param fsPath 文件系统路径
    * @param message 提交信息
@@ -972,6 +995,8 @@ export class SvnService {
       return;
     }
     
+    const { args: msgArgs, file: msgFile } = await this.createCommitMessageArgs(message);
+
     try {
       const isDirectory = (await vscode.workspace.fs.stat(vscode.Uri.file(fsPath))).type === vscode.FileType.Directory;
       
@@ -995,24 +1020,17 @@ export class SvnService {
               escapedPath = `${relativePath}@`;
             }
             
-            if (isDirectory) {
-              const result = await this.executeSvnCommand(`commit "${escapedPath}" -m "${message}"`, this.getCustomSvnRoot()!);
-              this.outputChannel.appendLine(result);
-              this.outputChannel.appendLine('========== SVN提交操作完成 ==========');
-              return;
-            } else {
-              const result = await this.executeSvnCommand(`commit "${escapedPath}" -m "${message}"`, this.getCustomSvnRoot()!);
-              this.outputChannel.appendLine(result);
-              this.outputChannel.appendLine('========== SVN提交操作完成 ==========');
-              return;
-            }
+            const result = await this.executeSvnCommand(`commit "${escapedPath}" ${msgArgs}`, this.getCustomSvnRoot()!);
+            this.outputChannel.appendLine(result);
+            this.outputChannel.appendLine('========== SVN提交操作完成 ==========');
+            return;
           }
         }
       }
       
       this.outputChannel.appendLine('正在提交文件...');
       if (isDirectory) {
-        const result = await this.executeSvnCommand(`commit -m "${message}"`, fsPath);
+        const result = await this.executeSvnCommand(`commit ${msgArgs}`, fsPath);
         this.outputChannel.appendLine(result);
       } else {
         const cwd = path.dirname(fsPath);
@@ -1025,7 +1043,7 @@ export class SvnService {
         
         this.outputChannel.appendLine(`工作目录: ${cwd}`);
         this.outputChannel.appendLine(`文件名: ${fileName}`);
-        const result = await this.executeSvnCommand(`commit "${fileName}" -m "${message}"`, cwd);
+        const result = await this.executeSvnCommand(`commit "${fileName}" ${msgArgs}`, cwd);
         this.outputChannel.appendLine(result);
       }
       
@@ -1041,6 +1059,8 @@ export class SvnService {
       }
       
       throw error;
+    } finally {
+      await this.cleanupCommitMessageFile(msgFile);
     }
   }
 
@@ -1518,6 +1538,8 @@ export class SvnService {
       this.outputChannel.appendLine(`  ${index + 1}. ${file}`);
     });
     
+    const { args: msgArgs, file: msgFile } = await this.createCommitMessageArgs(message);
+
     try {
       if (filteredFiles.length === 0) {
         throw new Error('没有可提交的文件（所有文件都被过滤器排除）');
@@ -1594,7 +1616,7 @@ export class SvnService {
       // --depth empty：svn commit 对目录目标默认按 infinity 递归，会把目录下未勾选的修改
       // （例如合并后仅 mergeinfo 变更的目录，其内部其它 changelist 的文件）一并提交
       this.outputChannel.appendLine('正在提交文件...');
-      const result = await this.executeSvnCommand(`commit --depth empty ${fileArgs} -m "${message}"`, workingDir);
+      const result = await this.executeSvnCommand(`commit --depth empty ${fileArgs} ${msgArgs}`, workingDir);
       this.outputChannel.appendLine(result);
       
       this.outputChannel.appendLine('========== SVN批量提交操作完成 ==========');
@@ -1609,6 +1631,8 @@ export class SvnService {
       }
       
       throw error;
+    } finally {
+      await this.cleanupCommitMessageFile(msgFile);
     }
   }
 
@@ -2678,8 +2702,10 @@ export class SvnService {
     this.outputChannel.appendLine(`工作目录: ${basePath}`);
     this.outputChannel.appendLine(`提交信息: ${message}`);
 
+    const { args: msgArgs, file: msgFile } = await this.createCommitMessageArgs(message);
+
     try {
-      const command = `commit --changelist "${changelistName.replace(/"/g, '\\"')}" -m "${message.replace(/"/g, '\\"')}"`;
+      const command = `commit --changelist "${changelistName.replace(/"/g, '\\"')}" ${msgArgs}`;
       const result = await this.executeSvnCommand(command, basePath);
       this.outputChannel.appendLine(result);
       this.outputChannel.appendLine('========== SVN Changelist 提交完成 ==========');
@@ -2693,6 +2719,8 @@ export class SvnService {
       }
 
       throw new Error(`提交 changelist 失败: ${error.message}`);
+    } finally {
+      await this.cleanupCommitMessageFile(msgFile);
     }
   }
 

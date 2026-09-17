@@ -4,7 +4,6 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { SvnService } from './svnService';
 import { SvnDiffProvider } from './diffProvider';
-import { SvnCommitPanel } from './commitPanel';
 import { SvnUpdatePanel } from './updatePanel';
 import { CommitLogStorage } from './commitLogStorage';
 import { SvnFolderCommitPanel } from './folderCommitPanel';
@@ -200,13 +199,16 @@ async function commitFileWithDiff(filePath: string): Promise<void> {
       }
     }
     
-    // 显示提交面板
-    await SvnCommitPanel.createOrShow(
+    // 复用文件夹提交面板，限定只显示该文件
+    await SvnFolderCommitPanel.createOrShow(
       vscode.extensions.getExtension('vscode-svn')?.extensionUri || vscode.Uri.file(__dirname),
-      filePath,
+      path.dirname(filePath),
       svnService,
       diffProvider,
-      logStorage
+      logStorage,
+      extensionContext,
+      undefined,
+      filePath
     );
   } catch (error: any) {
     vscode.window.showErrorMessage(`SVN操作失败: ${error.message}`);

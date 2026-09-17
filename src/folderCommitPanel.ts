@@ -45,7 +45,11 @@ export class SvnFolderCommitPanel {
 
     // --- 持久化状态读写 ---
     private _getPersistentStateKey(): string {
-        return `svnCommitPanel.state.${this.folderPath}`;
+        // 单文件模式只显示一个文件，若与目录模式共用 key，启动清理会把目录模式记录的
+        // 取消勾选文件误判为已消失并清空，故用独立 key 隔离
+        return this.restrictToFile
+            ? `svnCommitPanel.file.${this.restrictToFile}`
+            : `svnCommitPanel.state.${this.folderPath}`;
     }
 
     private _loadPersistentState(): CommitPanelPersistentState {
@@ -74,7 +78,8 @@ export class SvnFolderCommitPanel {
         private readonly svnService: SvnService,
         private readonly diffProvider: SvnDiffProvider,
         private readonly logStorage: CommitLogStorage,
-        private readonly context: vscode.ExtensionContext
+        private readonly context: vscode.ExtensionContext,
+        private readonly restrictToFile?: string
     ) {
         this._panel = panel;
         this.aiService = new AiService();
@@ -95,7 +100,8 @@ export class SvnFolderCommitPanel {
         diffProvider: SvnDiffProvider,
         logStorage: CommitLogStorage,
         context: vscode.ExtensionContext,
-        defaultMessage?: string
+        defaultMessage?: string,
+        restrictToFile?: string
     ) {
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
@@ -103,13 +109,15 @@ export class SvnFolderCommitPanel {
 
         // 检查是否已存在面板
         if (SvnFolderCommitPanel.currentPanel) {
-            // 比较文件夹路径，如果不同则关闭旧面板
-            if (SvnFolderCommitPanel.currentPanel.folderPath !== folderPath) {
-                console.log(`文件夹路径不同，关闭旧面板: ${SvnFolderCommitPanel.currentPanel.folderPath} -> ${folderPath}`);
+            // 比较文件夹路径与显示范围，任一不同则关闭旧面板
+            const sameTarget = SvnFolderCommitPanel.currentPanel.folderPath === folderPath
+                && SvnFolderCommitPanel.currentPanel.restrictToFile === restrictToFile;
+            if (!sameTarget) {
+                console.log(`提交目标不同，关闭旧面板: ${SvnFolderCommitPanel.currentPanel.folderPath} -> ${folderPath}`);
                 SvnFolderCommitPanel.currentPanel.dispose();
                 // 注意：dispose() 方法会将 currentPanel 设置为 undefined
             } else {
-                // 相同路径，直接显示现有面板（不指定 column，避免拉回主窗口）
+                // 相同目标，直接显示现有面板（不指定 column，避免拉回主窗口）
                 SvnFolderCommitPanel.currentPanel._panel.reveal(undefined, true);
                 // 若有默认日志，直接下发（webview 已就绪）
                 if (defaultMessage && defaultMessage.trim()) {
@@ -121,7 +129,7 @@ export class SvnFolderCommitPanel {
 
         const panel = vscode.window.createWebviewPanel(
             'svnFolderCommit',
-            '提交文件夹到SVN',
+            restrictToFile ? '提交文件到SVN' : '提交文件夹到SVN',
             column || vscode.ViewColumn.One,
             {
                 enableScripts: true,
@@ -154,7 +162,8 @@ export class SvnFolderCommitPanel {
             svnService,
             diffProvider,
             logStorage,
-            context
+            context,
+            restrictToFile
         );
         if (defaultMessage && defaultMessage.trim()) {
             SvnFolderCommitPanel.currentPanel._pendingCommitMessage = defaultMessage;
@@ -163,7 +172,9 @@ export class SvnFolderCommitPanel {
 
     private async _update(showInitialLoading = false) {
         const webview = this._panel.webview;
-        this._panel.title = `提交文件夹到SVN: ${path.basename(this.folderPath)}`;
+        this._panel.title = this.restrictToFile
+            ? `提交文件到SVN: ${path.basename(this.restrictToFile)}`
+            : `提交文件夹到SVN: ${path.basename(this.folderPath)}`;
 
         if (showInitialLoading) {
             webview.html = await this._getHtmlForWebview(true);
@@ -376,7 +387,9 @@ export class SvnFolderCommitPanel {
                 this.outputChannel.appendLine(`过滤器排除了 ${excludedCount} 个文件，显示 ${filteredFileStatuses.length} 个文件`);
             }
 
-            this._fileStatuses = filteredFileStatuses;
+            this._fileStatuses = this.restrictToFile
+                ? filteredFileStatuses.filter(f => f.path === this.restrictToFile)
+                : filteredFileStatuses;
             // 将当前文件中出现的 changelist 加入已知集合（新建/删除操作会单独更新）
             this._fileStatuses.forEach(fs => { if (fs.changelist) this._knownChangelists.add(fs.changelist); });
             console.log('Processed and filtered file statuses:', this._fileStatuses);
