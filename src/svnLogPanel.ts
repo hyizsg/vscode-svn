@@ -3815,12 +3815,20 @@ export class SvnLogPanel {
             const tempDir = path.join(os.tmpdir(), 'vscode-svn-diff');
             if (!fs.existsSync(tempDir)) { fs.mkdirSync(tempDir, { recursive: true }); }
 
+            const ext = path.extname(fileName);
+            const viewFilePath = path.join(tempDir, `${path.basename(fileName, ext)}.r${revision}${ext}`);
+
+            // 图片类文件：二进制安全导出，用原生预览打开，避免被当作文本打开而报错
+            if (this._isImageFile(svnFilePath)) {
+                await this.svnService.exportFileToPath(fileUrl, revision, viewFilePath, workingDir);
+                await vscode.commands.executeCommand('vscode.open', vscode.Uri.file(viewFilePath));
+                return;
+            }
+
             const content = await this.svnService.catFile(fileUrl, revision).catch(async () => {
                 return await this.svnService.executeSvnCommand(`cat "${fileUrl}@${revision}"`, workingDir, false);
             });
 
-            const ext = path.extname(fileName);
-            const viewFilePath = path.join(tempDir, `${path.basename(fileName, ext)}.r${revision}${ext}`);
             fs.writeFileSync(viewFilePath, content);
             await vscode.workspace.openTextDocument(viewFilePath).then(doc => vscode.window.showTextDocument(doc));
         } catch (error: any) {
