@@ -1060,15 +1060,36 @@ export class SvnLogPanel {
                     
                     this._log(`创建临时文件: ${prevFilePath} 和 ${currentFilePath}`);
                     
-                    // 获取前一个版本的文件内容
+                    // 分别获取两个版本内容，任一版本缺失（新增/删除文件）时以空内容占位，
+                    // 只要有一侧成功就仍能进行 side-by-side 对比
+                    let prevContent = '';
+                    let currentContent = '';
+                    let gotAny = false;
+
+                    // 获取前一个版本的文件内容（新增文件时上一版本不存在，允许失败）
                     const prevCommand = `cat "${fileUrl}@${prevRevision}"`;
                     this._log(`执行命令获取前一个版本内容: ${prevCommand}`);
-                    const prevContent = await this.svnService.executeSvnCommand(prevCommand, workingDir, false);
-                    
-                    // 获取当前版本的文件内容
+                    try {
+                        prevContent = await this.svnService.executeSvnCommand(prevCommand, workingDir, false);
+                        gotAny = true;
+                    } catch (e: any) {
+                        this._log(`前一个版本内容获取失败（可能为新增文件）: ${e.message}`);
+                    }
+
+                    // 获取当前版本的文件内容（删除文件时当前版本不存在，允许失败）
                     const currentCommand = `cat "${fileUrl}@${revision}"`;
                     this._log(`执行命令获取当前版本内容: ${currentCommand}`);
-                    const currentContent = await this.svnService.executeSvnCommand(currentCommand, workingDir, false);
+                    try {
+                        currentContent = await this.svnService.executeSvnCommand(currentCommand, workingDir, false);
+                        gotAny = true;
+                    } catch (e: any) {
+                        this._log(`当前版本内容获取失败（可能为已删除文件）: ${e.message}`);
+                    }
+
+                    // 两个版本都取不到，说明 URL 或版本有误，交给后续 diff 命令策略处理
+                    if (!gotAny) {
+                        throw new Error('两个版本内容均获取失败');
+                    }
                     
                     // 写入临时文件
                     fs.writeFileSync(prevFilePath, prevContent);
@@ -1111,6 +1132,9 @@ export class SvnLogPanel {
                 
                 // 策略1: 使用完整URL的diff命令（优先）
                 if (fileUrl) {
+                    // 以 @revision 作为 peg，能正确处理新增/删除/改名文件，是最可靠的单版本差异命令
+                    commands.push(`diff -c ${revision} "${fileUrl}@${revision}"`);
+                    commands.push(`diff -r ${prevRevision}:${revision} "${fileUrl}@${revision}"`);
                     commands.push(`diff -r ${prevRevision}:${revision} "${fileUrl}"`);
                     commands.push(`diff "${fileUrl}@${prevRevision}" "${fileUrl}@${revision}"`);
                 }
