@@ -433,8 +433,11 @@ export class SvnService {
       this.outputChannel.appendLine(`[_executeCommand] 添加XML输出标志: ${xmlFlag}`);
     }
     
+    // 提取子命令（命令串首个单词），避免用 includes 误匹配到路径/参数中的子串
+    const subcommand = command.trim().split(/\s+/)[0];
+
     // 对于diff命令，添加特殊处理以支持各种编码
-    if (command.includes('diff')) {
+    if (subcommand === 'diff') {
       if (!command.includes('--force')) {
         command = `${command} --force`;
       }
@@ -446,7 +449,7 @@ export class SvnService {
     }
     
     // 对于log命令，确保使用UTF-8输出
-    if (command.includes('log')) {
+    if (subcommand === 'log') {
       if (!command.includes('--xml') && useXml) {
         // XML输出时已经包含编码信息
       }

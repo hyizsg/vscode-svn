@@ -1010,29 +1010,11 @@ export class SvnLogPanel {
                 this._log(`获取仓库信息失败: ${error.message}`);
             }
             
-            // 构建正确的文件URL
-            let fileUrl = '';
-            if (repoRoot && filePath) {
-                // 智能拼接URL，避免路径重复
-                if (filePath.startsWith('/')) {
-                    // 如果文件路径以/开头，检查是否需要去除重复部分
-                    const repoUrlPath = repoUrl.replace(repoRoot, '');
-                    this._log(`仓库URL相对路径: ${repoUrlPath}`);
-                    
-                    if (repoUrlPath && filePath.startsWith(repoUrlPath)) {
-                        // 如果文件路径已经包含仓库路径，直接使用根URL拼接
-                        fileUrl = `${repoRoot}${filePath}`;
-                        this._log(`使用根URL拼接: ${fileUrl}`);
-                    } else {
-                        // 否则使用完整的仓库URL拼接
-                        fileUrl = `${repoUrl}${filePath}`;
-                        this._log(`使用完整仓库URL拼接: ${fileUrl}`);
-                    }
-                } else {
-                    // 相对路径，使用仓库URL拼接
-                    fileUrl = `${repoUrl}/${filePath}`;
-                    this._log(`相对路径拼接: ${fileUrl}`);
-                }
+            // 构建正确的文件URL（filePath 为相对仓库根的路径，统一用 repoRoot 拼接，
+            // 避免 repoUrl 指向具体文件时把两段路径粘连导致 URL 重复）
+            const fileUrl = this._buildFileUrl(filePath, repoUrl, repoRoot);
+            if (fileUrl) {
+                this._log(`构建文件URL: ${fileUrl}`);
             }
             
             // 如果成功构建了文件URL，尝试使用URL方式获取差异

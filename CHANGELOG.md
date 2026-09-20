@@ -1,5 +1,11 @@
 # 更新日志
 
+## [4.12.27] - 2026-09-20
+
+### 🐛 问题修复
+
+- **图片版本差异/查看历史版本导出失败**：修复两个根因——(1) `svn export`/`cat` 因临时目录名含 `diff` 被 `command.includes('diff')` 误判而错误追加 `--internal-diff` 参数，导致 `export doesn't accept option '--internal-diff'`；现改为按子命令首词精确判断。(2) 日志面板版本差异构建文件 URL 时，当仓库 URL 指向具体文件会把两段路径粘连（`.../btn_wabao.png/client/trunk/...`）导致 `path not found`；现统一用仓库根 + 相对路径拼接
+
 ## [4.12.26] - 2026-09-20
 
 ### 🐛 问题修复
