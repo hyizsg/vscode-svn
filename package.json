@@ -2,7 +2,7 @@
   "name": "vscode-svn-ai",
   "displayName": "VSCode SVN - AI智能版本控制",
   "description": "🚀 全平台SVN智能插件：基于原生命令行工具，支持Windows/macOS/Linux，内置AI提交日志生成，可视化差异对比，100%开源透明。无需TortoiseSVN，轻量级高性能！",
-  "version": "4.12.28",
+  "version": "4.12.29",
   "publisher": "pengfeiSummer",
   "icon": "resources/icon.png",
   "engines": {
@@ -80,6 +80,16 @@
       {
         "command": "vscode-svn.showRootMenu",
         "title": "打开 SVN 目录操作菜单",
+        "category": "SVN"
+      },
+      {
+        "command": "vscode-svn.runProject",
+        "title": "启动项目（输出到输出面板）",
+        "category": "SVN"
+      },
+      {
+        "command": "vscode-svn.stopProject",
+        "title": "停止项目",
         "category": "SVN"
       },
       {
@@ -1618,6 +1628,16 @@
           ],
           "default": "en",
           "description": "SVN 菜单 / 面板文案语言 (English / 中文)"
+        },
+        "vscode-svn.runProject.command": {
+          "type": "string",
+          "default": "",
+          "description": "「启动项目」命令要执行的 shell 命令，支持 ${workspaceFolder}；进程输出打到「项目运行」输出通道，不占用终端"
+        },
+        "vscode-svn.runProject.cwd": {
+          "type": "string",
+          "default": "${workspaceFolder}",
+          "description": "「启动项目」命令的工作目录，支持 ${workspaceFolder}"
         },
         "vscode-svn.customSvnRoot": {
           "type": "string",

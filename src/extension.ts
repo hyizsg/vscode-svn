@@ -18,6 +18,7 @@ import { SvnAuthService } from './svnAuthService';
 import { SvnAuthDialog } from './svnAuthDialog';
 import { SvnConflictPanel } from './conflictPanel';
 import { SvnMergePanel } from './mergePanel';
+import { runProject, stopProject, disposeProjectRunner } from './projectRunner';
 
 // SVN服务实例
 let svnService: SvnService;
@@ -3212,7 +3213,13 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand(alias, (...args: any[]) => vscode.commands.executeCommand(origin, ...args))
   );
 
+  // 后台启动/停止项目，输出打到「项目运行」通道而不占用终端
+  const runProjectCommand = vscode.commands.registerCommand('vscode-svn.runProject', () => runProject());
+  const stopProjectCommand = vscode.commands.registerCommand('vscode-svn.stopProject', () => stopProject());
+
   context.subscriptions.push(
+    runProjectCommand,
+    stopProjectCommand,
     uploadFileCommand,
     uploadFolderCommand,
     mergeToBranchCommand,
@@ -3429,4 +3436,5 @@ export function deactivate() {
   
   // 释放AI缓存服务单例
   AiCacheService.destroyInstance();
+  disposeProjectRunner();
 } 
