@@ -752,7 +752,7 @@ export class SvnFolderCommitPanel {
 
             const sourceUrl = mergeSourceUrl || await this.svnService.getWorkingCopyUrl(this.folderPath);
             const message = `Merged revision ${revision} from ${this._shortBranchName(sourceUrl)}:\n${this._lastCommittedMessage}`;
-            appendOutput(`\n正在提交合并结果…\n提交信息: ${message.split('\n')[0]}\n`);
+            appendOutput(`\n正在提交合并结果…\n提交信息:\n${message}\n\n`);
 
             this.svnService.onCommandOutput = (data: string) => appendOutput(data);
             try {
