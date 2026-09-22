@@ -789,24 +789,8 @@
         });
     }
 
-    // “复制”按钮：仅复制输出区的提交输出文本；“关闭”按钮：关闭提交面板
+    // 输出区底部按钮：关闭 / 取消 / 合并到分支相关
     function initializeOutputClear() {
-        const copyBtn = document.getElementById('copyOutputButton');
-        if (copyBtn) {
-            copyBtn.addEventListener('click', () => {
-                const output = document.getElementById('commitOutput');
-                vscode.postMessage({ command: 'copyText', text: output ? (output.textContent || '') : '' });
-                // 按钮文案短暂变为「已复制」作为反馈
-                copyBtn.textContent = '已复制';
-                setTimeout(() => { copyBtn.textContent = '复制'; }, 1500);
-            });
-        }
-        const closeBtn = document.getElementById('commitAgainButton');
-        if (closeBtn) {
-            closeBtn.addEventListener('click', () => {
-                vscode.postMessage({ command: 'commitAgain' });
-            });
-        }
         const closePanelBtn = document.getElementById('closeCommitPanelButton');
         if (closePanelBtn) {
             closePanelBtn.addEventListener('click', () => {
@@ -849,9 +833,9 @@
 
     // 统一控制输出区底部按钮组的显隐；visibleIds 中的按钮显示，其余隐藏
     const OUTPUT_FOOTER_BUTTONS = [
-        'copyOutputButton', 'changeMergeTargetButton', 'mergeToBranchButton',
+        'changeMergeTargetButton', 'mergeToBranchButton',
         'resolveMergeConflictsButton', 'commitMergeButton',
-        'commitAgainButton', 'cancelCommitButton', 'closeCommitPanelButton'
+        'cancelCommitButton', 'closeCommitPanelButton'
     ];
     function setFooterButtons(visibleIds) {
         const visible = new Set(visibleIds);
@@ -888,11 +872,11 @@
 
     // 提交成功后的按钮组：有版本号时附带「切换目录」「合并到(分支目录)」
     function showCommitDoneButtons() {
-        const ids = ['copyOutputButton'];
+        const ids = [];
         if (lastCommittedRevision) {
             ids.push('changeMergeTargetButton', 'mergeToBranchButton');
         }
-        ids.push('commitAgainButton', 'closeCommitPanelButton');
+        ids.push('closeCommitPanelButton');
         setFooterButtons(ids);
         renderMergeTargetButton();
     }
@@ -955,8 +939,8 @@
                 renderMergeTargetButton();
                 break;
             case 'mergeStarted':
-                // 合并/提交合并进行中：只保留复制按钮
-                setFooterButtons(['copyOutputButton']);
+                // 合并/提交合并进行中：隐藏全部底部按钮
+                setFooterButtons([]);
                 break;
             case 'mergeFinished':
                 onMergeFinished(message.success === true, message.hasConflicts === true);
@@ -967,7 +951,7 @@
     // 合并结束：有冲突则显示「解决冲突」「提交合并」，否则恢复提交完成按钮组
     function onMergeFinished(success, hasConflicts) {
         if (success && hasConflicts) {
-            setFooterButtons(['copyOutputButton', 'resolveMergeConflictsButton', 'commitMergeButton', 'commitAgainButton', 'closeCommitPanelButton']);
+            setFooterButtons(['resolveMergeConflictsButton', 'commitMergeButton', 'closeCommitPanelButton']);
             return;
         }
         showCommitDoneButtons();
@@ -1005,7 +989,7 @@
         output.scrollTop = output.scrollHeight;
     }
 
-    // 提交结束：隐藏取消，显示复制/(切换目录/合并到分支)/再次提交/关闭
+    // 提交结束：隐藏取消，显示 (切换目录/合并到分支)/关闭
     function onCommitFinished(success, files, revision) {
         const submitBtn = document.getElementById('submitButton');
         if (submitBtn) {

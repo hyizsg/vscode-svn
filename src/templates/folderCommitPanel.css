@@ -559,17 +559,13 @@ textarea {
     padding: 6px 16px;
 }
 
-/* 复制/再次提交按钮使用次级样式，主按钮为「关闭」 */
-#copyOutputButton,
-#commitAgainButton,
+/* 切换目录/解决冲突按钮使用次级样式，主按钮为「关闭」 */
 #changeMergeTargetButton,
 #resolveMergeConflictsButton {
     background-color: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
     color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
 }
 
-#copyOutputButton:hover,
-#commitAgainButton:hover,
 #changeMergeTargetButton:hover,
 #resolveMergeConflictsButton:hover {
     background-color: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));

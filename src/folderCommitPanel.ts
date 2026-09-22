@@ -977,11 +977,6 @@ export class SvnFolderCommitPanel {
                         this._panel.dispose();
                         return;
 
-                    case 'commitAgain':
-                        // 从输出视图返回提交面板：重新拉取状态并重绘
-                        await this._update();
-                        return;
-
                     case 'refreshPanel':
                         this._currentCommitMessage = typeof message.message === 'string'
                             ? message.message
@@ -991,12 +986,6 @@ export class SvnFolderCommitPanel {
                         } finally {
                             void this._panel.webview.postMessage({ command: 'refreshFinished' });
                         }
-                        return;
-
-                    case 'copyText':
-                        // 复制提交输出内容到系统剪贴板
-                        await vscode.env.clipboard.writeText(message.text || '');
-                        vscode.window.showInformationMessage('提交输出已复制');
                         return;
 
                     case 'cancelCommit':
