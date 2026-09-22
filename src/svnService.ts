@@ -2977,6 +2977,15 @@ export class SvnService {
         }
       );
 
+      this._activeProcess = svnProcess;
+      const clearActive = () => {
+        if (this._activeProcess === svnProcess) {
+          this._activeProcess = undefined;
+        }
+      };
+      svnProcess.on('exit', clearActive);
+      svnProcess.on('error', clearActive);
+
       if (svnProcess.stdout) {
         let buffer = '';
         svnProcess.stdout.on('data', (data: string) => {

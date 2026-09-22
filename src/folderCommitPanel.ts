@@ -44,6 +44,8 @@ export class SvnFolderCommitPanel {
 
     /** 本次提交是否被用户取消（用于区分取消与失败的提示） */
     private _commitCancelled = false;
+    /** 「合并到分支」流程是否被用户取消 */
+    private _mergeCancelled = false;
 
     /** 最近一次成功提交的版本号与提交信息，供「合并到分支」使用 */
     private _lastCommittedRevision?: number;
@@ -666,10 +668,13 @@ export class SvnFolderCommitPanel {
         const onProgress = (line: string) => appendOutput(`${line}\n`);
 
         this._mergeInProgress = true;
+        this._mergeCancelled = false;
+        let mergeApplied = false;
         webview.postMessage({ command: 'mergeStarted' });
         try {
             const sourceUrl = await this.svnService.getWorkingCopyUrl(this.folderPath);
             const targetUrl = await this.svnService.getWorkingCopyUrl(target);
+            this._throwIfMergeCancelled();
 
             // 把目标目录在其分支内的相对位置映射回源分支，保证合并源与目标目录一一对应，
             // 避免把源子目录的内容合并到目标分支根导致路径错位
@@ -688,6 +693,7 @@ export class SvnFolderCommitPanel {
 
             // 目标工作副本若有本地未提交修改，合并后自动提交会把它们一并带上，需用户确认
             const localChanges = (await this.svnService.executeSvnCommand('status -q', target)).trim();
+            this._throwIfMergeCancelled();
             if (localChanges) {
                 appendOutput(`\n⚠️ 目标工作副本存在未提交的本地修改：\n${localChanges}\n`);
                 const choice = await vscode.window.showWarningMessage(
@@ -701,15 +707,20 @@ export class SvnFolderCommitPanel {
                     this._mergeInProgress = false;
                     return;
                 }
+                this._throwIfMergeCancelled();
             }
 
             appendOutput(`\n正在更新目标工作副本到最新版本…\n`);
             await this.svnService.updateToHead(target, onProgress);
+            this._throwIfMergeCancelled();
 
             appendOutput(`\n正在执行 svn merge -c ${revision}…\n`);
+            mergeApplied = true;
             await this.svnService.merge(target, mergeSourceUrl, { revisionRange: String(revision), onProgress });
+            this._throwIfMergeCancelled();
 
             const conflicts = await this.svnService.getMergeConflicts(target);
+            this._throwIfMergeCancelled();
             if (conflicts.length > 0) {
                 appendOutput(`\n⚠️ 合并产生 ${conflicts.length} 个冲突，请先解决冲突后再提交：\n`);
                 conflicts.forEach(c => appendOutput(`  C ${c.path}\n`));
@@ -722,10 +733,23 @@ export class SvnFolderCommitPanel {
             this._mergeInProgress = false;
             await this._commitMerge(mergeSourceUrl);
         } catch (error: any) {
-            appendOutput(`\n❌ 合并失败: ${error.message}\n`);
+            if (this._mergeCancelled) {
+                appendOutput(`\n已取消合并\n`);
+                if (mergeApplied) {
+                    appendOutput(`⚠️ 目标工作副本可能残留部分合并结果，如需撤销请在 ${target} 执行 svn revert -R .\n`);
+                }
+            } else {
+                appendOutput(`\n❌ 合并失败: ${error.message}\n`);
+                vscode.window.showErrorMessage(`合并失败: ${error.message}`);
+            }
             webview.postMessage({ command: 'mergeFinished', success: false, hasConflicts: false });
-            vscode.window.showErrorMessage(`合并失败: ${error.message}`);
             this._mergeInProgress = false;
+        }
+    }
+
+    private _throwIfMergeCancelled(): void {
+        if (this._mergeCancelled) {
+            throw new Error('用户取消合并');
         }
     }
 
@@ -740,9 +764,11 @@ export class SvnFolderCommitPanel {
         const appendOutput = (text: string) => webview.postMessage({ command: 'appendCommitOutput', text });
 
         this._mergeInProgress = true;
+        this._mergeCancelled = false;
         webview.postMessage({ command: 'mergeStarted' });
         try {
             const left = await this.svnService.getMergeConflicts(target);
+            this._throwIfMergeCancelled();
             if (left.length > 0) {
                 appendOutput(`\n⚠️ 还有 ${left.length} 个文件冲突未解决，无法提交：\n`);
                 left.forEach(c => appendOutput(`  C ${c.path}\n`));
@@ -751,6 +777,7 @@ export class SvnFolderCommitPanel {
             }
 
             const sourceUrl = mergeSourceUrl || await this.svnService.getWorkingCopyUrl(this.folderPath);
+            this._throwIfMergeCancelled();
             const message = `Merged revision ${revision} from ${this._shortBranchName(sourceUrl)}:\n${this._lastCommittedMessage}`;
             appendOutput(`\n正在提交合并结果…\n提交信息:\n${message}\n\n`);
 
@@ -765,9 +792,13 @@ export class SvnFolderCommitPanel {
             webview.postMessage({ command: 'mergeFinished', success: true, hasConflicts: false });
             vscode.window.showInformationMessage(`r${revision} 已合并并提交到 ${path.basename(target)}`);
         } catch (error: any) {
-            appendOutput(`\n❌ 提交合并失败: ${error.message}\n`);
+            if (this._mergeCancelled) {
+                appendOutput(`\n已取消提交合并（合并结果仍保留在目标工作副本中，可稍后点击「提交合并」重试）\n`);
+            } else {
+                appendOutput(`\n❌ 提交合并失败: ${error.message}\n`);
+                vscode.window.showErrorMessage(`提交合并失败: ${error.message}`);
+            }
             webview.postMessage({ command: 'mergeFinished', success: false, hasConflicts: false });
-            vscode.window.showErrorMessage(`提交合并失败: ${error.message}`);
         } finally {
             this._mergeInProgress = false;
         }
@@ -993,6 +1024,11 @@ export class SvnFolderCommitPanel {
                     case 'cancelCommit':
                         // 取消正在执行的 SVN 提交命令
                         this._commitCancelled = true;
+                        this.svnService.cancelCurrentCommand();
+                        return;
+
+                    case 'cancelMerge':
+                        this._mergeCancelled = true;
                         this.svnService.cancelCurrentCommand();
                         return;
 

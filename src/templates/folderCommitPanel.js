@@ -802,7 +802,7 @@
             cancelBtn.addEventListener('click', () => {
                 cancelBtn.disabled = true;
                 cancelBtn.textContent = '取消中...';
-                vscode.postMessage({ command: 'cancelCommit' });
+                vscode.postMessage({ command: mergeRunning ? 'cancelMerge' : 'cancelCommit' });
             });
         }
         const mergeBtn = document.getElementById('mergeToBranchButton');
@@ -850,9 +850,10 @@
         });
     }
 
-    // 「合并到分支」状态：最近提交版本号 + 目标目录信息
+    // 「合并到分支」状态：最近提交版本号 + 目标目录信息 + 是否正在合并
     let lastCommittedRevision = null;
     let mergeTargetInfo = null;
+    let mergeRunning = false;
 
     function renderMergeTargetButton() {
         const btn = document.getElementById('mergeToBranchButton');
@@ -939,8 +940,16 @@
                 renderMergeTargetButton();
                 break;
             case 'mergeStarted':
-                // 合并/提交合并进行中：隐藏全部底部按钮
-                setFooterButtons([]);
+                // 合并/提交合并进行中：只显示「取消」
+                mergeRunning = true;
+                setFooterButtons(['cancelCommitButton']);
+                {
+                    const cancelBtn = document.getElementById('cancelCommitButton');
+                    if (cancelBtn) {
+                        cancelBtn.disabled = false;
+                        cancelBtn.textContent = '取消';
+                    }
+                }
                 break;
             case 'mergeFinished':
                 onMergeFinished(message.success === true, message.hasConflicts === true);
@@ -948,10 +957,15 @@
         }
     });
 
-    // 合并结束：有冲突则显示「解决冲突」「提交合并」，否则恢复提交完成按钮组
+    // 合并结束：有冲突显示「解决冲突」「提交合并」；成功只显示「关闭」；失败/取消恢复提交完成按钮组以便重试
     function onMergeFinished(success, hasConflicts) {
+        mergeRunning = false;
         if (success && hasConflicts) {
             setFooterButtons(['resolveMergeConflictsButton', 'commitMergeButton', 'closeCommitPanelButton']);
+            return;
+        }
+        if (success) {
+            setFooterButtons(['closeCommitPanelButton']);
             return;
         }
         showCommitDoneButtons();
