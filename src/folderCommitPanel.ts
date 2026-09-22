@@ -23,6 +23,8 @@ interface CommitPanelPersistentState {
     hiddenGroups: string[];
 }
 
+const STATE_KEY_MERGE_TARGET = 'mergeToBranch.lastTargetPath';
+
 export class SvnFolderCommitPanel {
     public static currentPanel: SvnFolderCommitPanel | undefined;
     private readonly _panel: vscode.WebviewPanel;
@@ -42,6 +44,13 @@ export class SvnFolderCommitPanel {
 
     /** 本次提交是否被用户取消（用于区分取消与失败的提示） */
     private _commitCancelled = false;
+
+    /** 最近一次成功提交的版本号与提交信息，供「合并到分支」使用 */
+    private _lastCommittedRevision?: number;
+    private _lastCommittedMessage = '';
+    /** 「合并到分支」目标工作副本目录（与合并到其他分支面板共用持久化 key） */
+    private _mergeTargetPath?: string;
+    private _mergeInProgress = false;
 
     // --- 持久化状态读写 ---
     private _getPersistentStateKey(): string {
@@ -458,8 +467,13 @@ export class SvnFolderCommitPanel {
         this._panel.title = `SVN提交: ${path.basename(this.folderPath)}`;
 
         // 挂载实时输出回调，将 SVN 命令的 stdout/stderr 实时流到面板内嵌输出区
+        let committedRevision: number | undefined;
         this.svnService.onCommandOutput = (data: string) => {
             appendOutput(data);
+            const m = /Committed revision (\d+)\.|修订版(?:为)?\s*(\d+)/.exec(data);
+            if (m) {
+                committedRevision = parseInt(m[1] || m[2], 10);
+            }
         };
 
         try {
@@ -541,7 +555,14 @@ export class SvnFolderCommitPanel {
             this._currentCommitMessage = '';
 
             appendOutput(`\n提交完成 (${files.length} 个文件)\n`);
-            webview.postMessage({ command: 'commitFinished', success: true, files });
+            if (committedRevision) {
+                this._lastCommittedRevision = committedRevision;
+                this._lastCommittedMessage = message;
+            }
+            webview.postMessage({ command: 'commitFinished', success: true, files, revision: committedRevision });
+            if (committedRevision) {
+                await this._postMergeTargetInfo();
+            }
             vscode.window.showInformationMessage('文件已成功提交到SVN');
         } catch (error: any) {
             if (this._commitCancelled) {
@@ -555,6 +576,198 @@ export class SvnFolderCommitPanel {
         } finally {
             // 取消实时输出回调
             this.svnService.onCommandOutput = undefined;
+        }
+    }
+
+    // ============================================================
+    // 提交完成后「合并到分支」：update → merge -c REV → 冲突检测 → commit
+    // ============================================================
+
+    /** 从完整 URL 提取分支根 URL（…/trunk、…/branches/xxx、…/tags/xxx），非标准布局返回空串 */
+    private _branchRootUrl(url: string): string {
+        const m = /^(.*?\/(?:trunk|branches\/[^/]+|tags\/[^/]+))(?:\/|$)/.exec(url);
+        return m ? m[1] : '';
+    }
+
+    /** 分支短名（trunk / branches/xxx / tags/xxx），用于按钮第二行与合并日志 */
+    private _shortBranchName(url: string): string {
+        const m = /\/(trunk|branches\/[^/]+|tags\/[^/]+)(?:\/|$)/.exec(url);
+        return m ? m[1] : url;
+    }
+
+    /** 读取并校验合并目标目录，把目录名与分支名下发给前端渲染按钮 */
+    private async _postMergeTargetInfo(): Promise<void> {
+        if (!this._mergeTargetPath) {
+            const saved = this.context.globalState.get<string>(STATE_KEY_MERGE_TARGET, '');
+            if (saved && fs.existsSync(saved)) {
+                this._mergeTargetPath = saved;
+            }
+        }
+        let info: { targetPath: string; dirName: string; branchName: string } | null = null;
+        if (this._mergeTargetPath) {
+            try {
+                const url = await this.svnService.getWorkingCopyUrl(this._mergeTargetPath);
+                info = {
+                    targetPath: this._mergeTargetPath,
+                    dirName: path.basename(this._mergeTargetPath),
+                    branchName: this._shortBranchName(url)
+                };
+            } catch {
+                this._mergeTargetPath = undefined;
+            }
+        }
+        void this._panel.webview.postMessage({ command: 'mergeTargetInfo', info });
+    }
+
+    /** 弹出目录选择器选择目标分支工作副本，返回是否选择成功 */
+    private async _chooseMergeTarget(): Promise<boolean> {
+        const picked = await vscode.window.showOpenDialog({
+            canSelectFiles: false, canSelectFolders: true, canSelectMany: false,
+            openLabel: '选择目标分支工作副本（已 checkout）',
+            title: '选择要合并到的分支目录'
+        });
+        if (!picked || picked.length === 0) { return false; }
+        const dir = picked[0].fsPath;
+        let targetUrl = '';
+        try {
+            targetUrl = await this.svnService.getWorkingCopyUrl(dir);
+        } catch {
+            vscode.window.showErrorMessage('该目录不是 SVN 工作副本');
+            return false;
+        }
+        try {
+            const sourceUrl = await this.svnService.getWorkingCopyUrl(this.folderPath);
+            const sameBranch = this._branchRootUrl(sourceUrl) && this._branchRootUrl(sourceUrl) === this._branchRootUrl(targetUrl);
+            if (targetUrl === sourceUrl || sameBranch) {
+                vscode.window.showErrorMessage('目标目录与当前提交目录属于同一分支，无需合并');
+                return false;
+            }
+        } catch { /* 源 URL 读取失败时不做同分支校验 */ }
+        this._mergeTargetPath = dir;
+        await this.context.globalState.update(STATE_KEY_MERGE_TARGET, dir);
+        await this._postMergeTargetInfo();
+        return true;
+    }
+
+    private async _mergeToBranch(): Promise<void> {
+        if (this._mergeInProgress) { return; }
+        const revision = this._lastCommittedRevision;
+        if (!revision) {
+            vscode.window.showWarningMessage('没有可合并的提交版本');
+            return;
+        }
+        if (!this._mergeTargetPath && !(await this._chooseMergeTarget())) { return; }
+        const target = this._mergeTargetPath!;
+
+        const webview = this._panel.webview;
+        const appendOutput = (text: string) => webview.postMessage({ command: 'appendCommitOutput', text });
+        const onProgress = (line: string) => appendOutput(`${line}\n`);
+
+        this._mergeInProgress = true;
+        webview.postMessage({ command: 'mergeStarted' });
+        try {
+            const sourceUrl = await this.svnService.getWorkingCopyUrl(this.folderPath);
+            const targetUrl = await this.svnService.getWorkingCopyUrl(target);
+
+            // 把目标目录在其分支内的相对位置映射回源分支，保证合并源与目标目录一一对应，
+            // 避免把源子目录的内容合并到目标分支根导致路径错位
+            const srcRoot = this._branchRootUrl(sourceUrl);
+            const tgtRoot = this._branchRootUrl(targetUrl);
+            const mergeSourceUrl = (srcRoot && tgtRoot) ? srcRoot + targetUrl.slice(tgtRoot.length) : sourceUrl;
+            if (mergeSourceUrl === targetUrl) {
+                throw new Error('目标目录与当前提交目录属于同一分支，无需合并');
+            }
+            if (srcRoot && sourceUrl !== mergeSourceUrl && !sourceUrl.startsWith(mergeSourceUrl + '/')) {
+                appendOutput(`⚠️ 提示：本次提交目录 (${sourceUrl}) 不在合并源 (${mergeSourceUrl}) 之下，合并可能不包含本次改动\n`);
+            }
+
+            appendOutput(`\n========== 合并 r${revision} 到分支 ==========\n`);
+            appendOutput(`合并源: ${mergeSourceUrl}\n目标目录: ${target}\n`);
+
+            // 目标工作副本若有本地未提交修改，合并后自动提交会把它们一并带上，需用户确认
+            const localChanges = (await this.svnService.executeSvnCommand('status -q', target)).trim();
+            if (localChanges) {
+                appendOutput(`\n⚠️ 目标工作副本存在未提交的本地修改：\n${localChanges}\n`);
+                const choice = await vscode.window.showWarningMessage(
+                    '目标分支工作副本存在未提交的本地修改，合并后自动提交会把这些修改一并提交，是否继续？',
+                    { modal: true },
+                    '继续合并'
+                );
+                if (choice !== '继续合并') {
+                    appendOutput(`已取消合并\n`);
+                    webview.postMessage({ command: 'mergeFinished', success: false, hasConflicts: false });
+                    this._mergeInProgress = false;
+                    return;
+                }
+            }
+
+            appendOutput(`\n正在更新目标工作副本到最新版本…\n`);
+            await this.svnService.updateToHead(target, onProgress);
+
+            appendOutput(`\n正在执行 svn merge -c ${revision}…\n`);
+            await this.svnService.merge(target, mergeSourceUrl, { revisionRange: String(revision), onProgress });
+
+            const conflicts = await this.svnService.getMergeConflicts(target);
+            if (conflicts.length > 0) {
+                appendOutput(`\n⚠️ 合并产生 ${conflicts.length} 个冲突，请先解决冲突后再提交：\n`);
+                conflicts.forEach(c => appendOutput(`  C ${c.path}\n`));
+                webview.postMessage({ command: 'mergeFinished', success: true, hasConflicts: true });
+                this._mergeInProgress = false;
+                await vscode.commands.executeCommand('vscode-svn.scanAndResolveConflicts', vscode.Uri.file(target));
+                return;
+            }
+
+            this._mergeInProgress = false;
+            await this._commitMerge(mergeSourceUrl);
+        } catch (error: any) {
+            appendOutput(`\n❌ 合并失败: ${error.message}\n`);
+            webview.postMessage({ command: 'mergeFinished', success: false, hasConflicts: false });
+            vscode.window.showErrorMessage(`合并失败: ${error.message}`);
+            this._mergeInProgress = false;
+        }
+    }
+
+    /** 提交合并结果；冲突未清则回到冲突状态 */
+    private async _commitMerge(mergeSourceUrl?: string): Promise<void> {
+        if (this._mergeInProgress) { return; }
+        const target = this._mergeTargetPath;
+        const revision = this._lastCommittedRevision;
+        if (!target || !revision) { return; }
+
+        const webview = this._panel.webview;
+        const appendOutput = (text: string) => webview.postMessage({ command: 'appendCommitOutput', text });
+
+        this._mergeInProgress = true;
+        webview.postMessage({ command: 'mergeStarted' });
+        try {
+            const left = await this.svnService.getMergeConflicts(target);
+            if (left.length > 0) {
+                appendOutput(`\n⚠️ 还有 ${left.length} 个文件冲突未解决，无法提交：\n`);
+                left.forEach(c => appendOutput(`  C ${c.path}\n`));
+                webview.postMessage({ command: 'mergeFinished', success: true, hasConflicts: true });
+                return;
+            }
+
+            const sourceUrl = mergeSourceUrl || await this.svnService.getWorkingCopyUrl(this.folderPath);
+            const message = `Merged revision ${revision} from ${this._shortBranchName(sourceUrl)}:\n${this._lastCommittedMessage}`;
+            appendOutput(`\n正在提交合并结果…\n提交信息: ${message.split('\n')[0]}\n`);
+
+            this.svnService.onCommandOutput = (data: string) => appendOutput(data);
+            try {
+                await this.svnService.commitWorkingCopy(target, message);
+            } finally {
+                this.svnService.onCommandOutput = undefined;
+            }
+
+            appendOutput(`\n✅ r${revision} 已合并并提交到 ${path.basename(target)}\n`);
+            webview.postMessage({ command: 'mergeFinished', success: true, hasConflicts: false });
+            vscode.window.showInformationMessage(`r${revision} 已合并并提交到 ${path.basename(target)}`);
+        } catch (error: any) {
+            appendOutput(`\n❌ 提交合并失败: ${error.message}\n`);
+            webview.postMessage({ command: 'mergeFinished', success: false, hasConflicts: false });
+            vscode.window.showErrorMessage(`提交合并失败: ${error.message}`);
+        } finally {
+            this._mergeInProgress = false;
         }
     }
 
@@ -790,6 +1003,24 @@ export class SvnFolderCommitPanel {
                         // 取消正在执行的 SVN 提交命令
                         this._commitCancelled = true;
                         this.svnService.cancelCurrentCommand();
+                        return;
+
+                    case 'mergeToBranch':
+                        await this._mergeToBranch();
+                        return;
+
+                    case 'chooseMergeTarget':
+                        await this._chooseMergeTarget();
+                        return;
+
+                    case 'openMergeConflicts':
+                        if (this._mergeTargetPath) {
+                            await vscode.commands.executeCommand('vscode-svn.scanAndResolveConflicts', vscode.Uri.file(this._mergeTargetPath));
+                        }
+                        return;
+
+                    case 'commitMerge':
+                        await this._commitMerge();
                         return;
                 }
             },

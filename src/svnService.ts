@@ -1068,6 +1068,21 @@ export class SvnService {
   }
 
   /**
+   * 提交整个工作副本目录（用于合并后提交），不弹出输出面板，输出通过 onCommandOutput 实时回调
+   * @param workingDir 工作副本目录
+   * @param message 提交信息
+   */
+  public async commitWorkingCopy(workingDir: string, message: string): Promise<string> {
+    const { args: msgArgs, file: msgFile } = await this.createCommitMessageArgs(message);
+    try {
+      this.outputChannel.appendLine(`[commitWorkingCopy] 提交目录: ${workingDir}`);
+      return await this.executeSvnCommand(`commit ${msgArgs}`, workingDir);
+    } finally {
+      await this.cleanupCommitMessageFile(msgFile);
+    }
+  }
+
+  /**
    * 更新工作副本
    * @param fsPath 文件系统路径
    */

@@ -561,14 +561,41 @@ textarea {
 
 /* 复制/再次提交按钮使用次级样式，主按钮为「关闭」 */
 #copyOutputButton,
-#commitAgainButton {
+#commitAgainButton,
+#changeMergeTargetButton,
+#resolveMergeConflictsButton {
     background-color: var(--vscode-button-secondaryBackground, var(--vscode-button-background));
     color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground));
 }
 
 #copyOutputButton:hover,
-#commitAgainButton:hover {
+#commitAgainButton:hover,
+#changeMergeTargetButton:hover,
+#resolveMergeConflictsButton:hover {
     background-color: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground));
+}
+
+/* 「合并到(分支目录)」两行按钮：第一行目录名，第二行 SVN 分支名 */
+.commit-output-footer .two-line-button {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    line-height: 1.25;
+    padding: 3px 14px;
+}
+
+.two-line-button .btn-line2 {
+    font-size: 10px;
+    opacity: 0.8;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.two-line-button .btn-line2:empty {
+    display: none;
 }
 
 /* 提交进行中/结束后：整个面板只显示输出区与关闭按钮 */

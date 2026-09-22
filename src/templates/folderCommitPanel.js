@@ -821,6 +821,80 @@
                 vscode.postMessage({ command: 'cancelCommit' });
             });
         }
+        const mergeBtn = document.getElementById('mergeToBranchButton');
+        if (mergeBtn) {
+            mergeBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'mergeToBranch' });
+            });
+        }
+        const changeTargetBtn = document.getElementById('changeMergeTargetButton');
+        if (changeTargetBtn) {
+            changeTargetBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'chooseMergeTarget' });
+            });
+        }
+        const resolveBtn = document.getElementById('resolveMergeConflictsButton');
+        if (resolveBtn) {
+            resolveBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'openMergeConflicts' });
+            });
+        }
+        const commitMergeBtn = document.getElementById('commitMergeButton');
+        if (commitMergeBtn) {
+            commitMergeBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'commitMerge' });
+            });
+        }
+    }
+
+    // 统一控制输出区底部按钮组的显隐；visibleIds 中的按钮显示，其余隐藏
+    const OUTPUT_FOOTER_BUTTONS = [
+        'copyOutputButton', 'changeMergeTargetButton', 'mergeToBranchButton',
+        'resolveMergeConflictsButton', 'commitMergeButton',
+        'commitAgainButton', 'cancelCommitButton', 'closeCommitPanelButton'
+    ];
+    function setFooterButtons(visibleIds) {
+        const visible = new Set(visibleIds);
+        OUTPUT_FOOTER_BUTTONS.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (visible.has(id)) {
+                el.style.display = el.classList.contains('two-line-button') ? 'inline-flex' : 'inline-block';
+            } else {
+                el.style.display = 'none';
+            }
+        });
+    }
+
+    // 「合并到分支」状态：最近提交版本号 + 目标目录信息
+    let lastCommittedRevision = null;
+    let mergeTargetInfo = null;
+
+    function renderMergeTargetButton() {
+        const btn = document.getElementById('mergeToBranchButton');
+        if (!btn) return;
+        const line1 = btn.querySelector('.btn-line1');
+        const line2 = btn.querySelector('.btn-line2');
+        if (mergeTargetInfo) {
+            line1.textContent = '合并到(' + mergeTargetInfo.dirName + ')';
+            line2.textContent = mergeTargetInfo.branchName || '';
+            btn.title = '将 r' + (lastCommittedRevision || '') + ' 合并到 ' + mergeTargetInfo.targetPath + ' 并自动提交';
+        } else {
+            line1.textContent = '合并到分支...';
+            line2.textContent = '';
+            btn.title = '选择要合并到的分支目录，然后自动合并并提交本次版本';
+        }
+    }
+
+    // 提交成功后的按钮组：有版本号时附带「切换目录」「合并到(分支目录)」
+    function showCommitDoneButtons() {
+        const ids = ['copyOutputButton'];
+        if (lastCommittedRevision) {
+            ids.push('changeMergeTargetButton', 'mergeToBranchButton');
+        }
+        ids.push('commitAgainButton', 'closeCommitPanelButton');
+        setFooterButtons(ids);
+        renderMergeTargetButton();
     }
 
     function updateExtensionFilter() {
@@ -874,10 +948,30 @@
                 appendCommitOutput(message.text);
                 break;
             case 'commitFinished':
-                onCommitFinished(message.success === true, message.files || []);
+                onCommitFinished(message.success === true, message.files || [], message.revision);
+                break;
+            case 'mergeTargetInfo':
+                mergeTargetInfo = message.info || null;
+                renderMergeTargetButton();
+                break;
+            case 'mergeStarted':
+                // 合并/提交合并进行中：只保留复制按钮
+                setFooterButtons(['copyOutputButton']);
+                break;
+            case 'mergeFinished':
+                onMergeFinished(message.success === true, message.hasConflicts === true);
                 break;
         }
     });
+
+    // 合并结束：有冲突则显示「解决冲突」「提交合并」，否则恢复提交完成按钮组
+    function onMergeFinished(success, hasConflicts) {
+        if (success && hasConflicts) {
+            setFooterButtons(['copyOutputButton', 'resolveMergeConflictsButton', 'commitMergeButton', 'commitAgainButton', 'closeCommitPanelButton']);
+            return;
+        }
+        showCommitDoneButtons();
+    }
 
     // 提交开始：整个面板切换为只显示输出区，并禁用提交按钮
     function showCommitOutput() {
@@ -888,16 +982,11 @@
         section.style.display = '';
         // 隐藏过滤区/文件列表/提交区，输出区撑满整个面板
         document.body.classList.add('committing');
-        // 提交中只显示「取消」：隐藏复制/再次提交/关闭
-        const copyBtn = document.getElementById('copyOutputButton');
-        if (copyBtn) copyBtn.style.display = 'none';
-        const againBtn = document.getElementById('commitAgainButton');
-        if (againBtn) againBtn.style.display = 'none';
-        const closeBtn = document.getElementById('closeCommitPanelButton');
-        if (closeBtn) closeBtn.style.display = 'none';
+        // 提交中只显示「取消」
+        lastCommittedRevision = null;
+        setFooterButtons(['cancelCommitButton']);
         const cancelBtn = document.getElementById('cancelCommitButton');
         if (cancelBtn) {
-            cancelBtn.style.display = 'inline-block';
             cancelBtn.disabled = false;
             cancelBtn.textContent = '取消';
         }
@@ -916,21 +1005,15 @@
         output.scrollTop = output.scrollHeight;
     }
 
-    // 提交结束：隐藏取消，显示复制/再次提交/关闭
-    function onCommitFinished(success, files) {
+    // 提交结束：隐藏取消，显示复制/(切换目录/合并到分支)/再次提交/关闭
+    function onCommitFinished(success, files, revision) {
         const submitBtn = document.getElementById('submitButton');
         if (submitBtn) {
             submitBtn.disabled = false;
             submitBtn.textContent = '提交';
         }
-        const cancelBtn = document.getElementById('cancelCommitButton');
-        if (cancelBtn) cancelBtn.style.display = 'none';
-        const copyBtn = document.getElementById('copyOutputButton');
-        if (copyBtn) copyBtn.style.display = 'inline-block';
-        const againBtn = document.getElementById('commitAgainButton');
-        if (againBtn) againBtn.style.display = 'inline-block';
-        const closePanelBtn = document.getElementById('closeCommitPanelButton');
-        if (closePanelBtn) closePanelBtn.style.display = 'inline-block';
+        lastCommittedRevision = (success && revision) ? revision : null;
+        showCommitDoneButtons();
         if (!success || !files || files.length === 0) return;
 
         const removeSet = new Set(files);
