@@ -561,6 +561,8 @@ export class SvnFolderCommitPanel {
             }
             webview.postMessage({ command: 'commitFinished', success: true, files, revision: committedRevision });
             if (committedRevision) {
+                // 先摘除实时输出回调，避免查询分支信息的 svn info 原始 XML 混入提交输出
+                this.svnService.onCommandOutput = undefined;
                 await this._postMergeTargetInfo();
             }
             vscode.window.showInformationMessage('文件已成功提交到SVN');
