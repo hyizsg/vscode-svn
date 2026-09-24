@@ -829,12 +829,18 @@
                 vscode.postMessage({ command: 'commitMerge' });
             });
         }
+        const retryCommitMergeBtn = document.getElementById('retryCommitMergeButton');
+        if (retryCommitMergeBtn) {
+            retryCommitMergeBtn.addEventListener('click', () => {
+                vscode.postMessage({ command: 'commitMerge' });
+            });
+        }
     }
 
     // 统一控制输出区底部按钮组的显隐；visibleIds 中的按钮显示，其余隐藏
     const OUTPUT_FOOTER_BUTTONS = [
         'changeMergeTargetButton', 'mergeToBranchButton',
-        'resolveMergeConflictsButton', 'commitMergeButton',
+        'resolveMergeConflictsButton', 'commitMergeButton', 'retryCommitMergeButton',
         'cancelCommitButton', 'closeCommitPanelButton'
     ];
     function setFooterButtons(visibleIds) {
@@ -952,13 +958,14 @@
                 }
                 break;
             case 'mergeFinished':
-                onMergeFinished(message.success === true, message.hasConflicts === true);
+                onMergeFinished(message.success === true, message.hasConflicts === true, message.commitFailed === true);
                 break;
         }
     });
 
-    // 合并结束：有冲突显示「解决冲突」「提交合并」；成功只显示「关闭」；失败/取消恢复提交完成按钮组以便重试
-    function onMergeFinished(success, hasConflicts) {
+    // 合并结束：有冲突显示「解决冲突」「提交合并」；成功只显示「关闭」；
+    // 合并已完成但提交失败显示「再次提交」；合并失败/取消恢复提交完成按钮组以便重试
+    function onMergeFinished(success, hasConflicts, commitFailed) {
         mergeRunning = false;
         if (success && hasConflicts) {
             setFooterButtons(['resolveMergeConflictsButton', 'commitMergeButton', 'closeCommitPanelButton']);
@@ -966,6 +973,10 @@
         }
         if (success) {
             setFooterButtons(['closeCommitPanelButton']);
+            return;
+        }
+        if (commitFailed) {
+            setFooterButtons(['retryCommitMergeButton', 'closeCommitPanelButton']);
             return;
         }
         showCommitDoneButtons();

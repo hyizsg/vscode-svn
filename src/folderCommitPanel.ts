@@ -53,6 +53,8 @@ export class SvnFolderCommitPanel {
     /** 「合并到分支」目标工作副本目录（与合并到其他分支面板共用持久化 key） */
     private _mergeTargetPath?: string;
     private _mergeInProgress = false;
+    /** 最近一次合并的源 URL，用于「提交合并」/「再次提交」生成一致的提交信息 */
+    private _lastMergeSourceUrl?: string;
 
     // --- 持久化状态读写 ---
     private _getPersistentStateKey(): string {
@@ -776,7 +778,8 @@ export class SvnFolderCommitPanel {
                 return;
             }
 
-            const sourceUrl = mergeSourceUrl || await this.svnService.getWorkingCopyUrl(this.folderPath);
+            if (mergeSourceUrl) { this._lastMergeSourceUrl = mergeSourceUrl; }
+            const sourceUrl = mergeSourceUrl || this._lastMergeSourceUrl || await this.svnService.getWorkingCopyUrl(this.folderPath);
             this._throwIfMergeCancelled();
             const message = `Merged revision ${revision} from ${this._shortBranchName(sourceUrl)}:\n${this._lastCommittedMessage}`;
             appendOutput(`\n正在提交合并结果…\n提交信息:\n${message}\n\n`);
@@ -793,12 +796,12 @@ export class SvnFolderCommitPanel {
             vscode.window.showInformationMessage(`r${revision} 已合并并提交到 ${path.basename(target)}`);
         } catch (error: any) {
             if (this._mergeCancelled) {
-                appendOutput(`\n已取消提交合并（合并结果仍保留在目标工作副本中，可稍后点击「提交合并」重试）\n`);
+                appendOutput(`\n已取消提交合并（合并结果仍保留在目标工作副本中，可点击「再次提交」重试）\n`);
             } else {
                 appendOutput(`\n❌ 提交合并失败: ${error.message}\n`);
                 vscode.window.showErrorMessage(`提交合并失败: ${error.message}`);
             }
-            webview.postMessage({ command: 'mergeFinished', success: false, hasConflicts: false });
+            webview.postMessage({ command: 'mergeFinished', success: false, hasConflicts: false, commitFailed: true });
         } finally {
             this._mergeInProgress = false;
         }
