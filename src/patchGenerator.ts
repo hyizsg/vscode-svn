@@ -328,15 +328,16 @@ export class PatchGenerator {
         const prompt = `请根据单个 SVN 日志生成 Lua 热更新 patch。\n\n` +
             `版本: r${revision}\n作者: ${entry.author}\n提交信息: ${entry.message}\n\n` +
             `强制规则：\n` +
-            `1. 文件第一行必须是 require("patch_always")。\n` +
-            `2. 每次生成独立完整文件，不保留历史 patch。\n` +
-            `3. src/app 路径转为 app.xxx require；src/battle 转为 battle.xxx require。\n` +
-            `4. 必须重定义受影响的完整公开函数，保持冒号/点号和参数完全一致。\n` +
-            `5. 原文件顶层 local/upvalue 在 patch 中不可见，必须重新 require 或重新声明。\n` +
-            `6. local function 不能直接替换，需内联到公开调用者。\n` +
-            `7. EMAP/TMAP/AMAP 保存旧函数引用时，重定义后必须同步重绑。\n` +
-            `8. 文件末尾用中文 Lua 注释列出 QA 测试用例。\n` +
-            (configPatch ? `9. 以下配置表 patch 必须原样包含在代码中：\n${configPatch}\n\n` : '') +
+            `1. 严格参考现有 patch.lua 格式：第一行必须是 require("patch_always")，下一段直接进入模块 patch，不生成版本、作者、变更说明、start/end 或分隔线等头尾说明。\n` +
+            `2. 每个模块代码前只写一行“-- require路径”，随后定义 local 模块变量和完整替换函数，例如“-- app.views.xxx”下一行“local Xxx = require("app.views.xxx")”。\n` +
+            `3. 文件末尾严格使用“-- QA测试用例：”标题，后续每条使用“-- 1. ...；”格式，不添加其他尾部说明。\n` +
+            `4. 每次生成独立完整文件，不保留历史 patch。\n` +
+            `5. 必须使用变更材料中给出的 require 路径。\n` +
+            `6. 必须重定义受影响的完整公开函数，保持冒号/点号和参数完全一致。\n` +
+            `7. 原文件顶层 local/upvalue 在 patch 中不可见，必须重新 require 或重新声明。\n` +
+            `8. local function 不能直接替换，需内联到公开调用者。\n` +
+            `9. EMAP/TMAP/AMAP 保存旧函数引用时，重定义后必须同步重绑。\n` +
+            (configPatch ? `10. 以下配置表 patch 必须原样包含在代码中：\n${configPatch}\n\n` : '') +
             `变更材料：\n${sections.join('\n\n====================\n\n')}`;
 
         const result = await this.aiService.generateText(prompt, instruction, `正在生成 r${revision} Lua patch...`);
