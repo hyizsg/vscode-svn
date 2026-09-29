@@ -224,6 +224,21 @@ body {
     color: var(--vscode-list-activeSelectionForeground);
 }
 
+.log-entry.merged {
+    opacity: 0.45;
+}
+
+.log-entry.merged.selected,
+.log-entry.merged.active {
+    opacity: 0.7;
+}
+
+.log-entry.merged .log-revision-cell::after {
+    content: ' ✓';
+    color: var(--vscode-charts-green, #89d185);
+    font-size: 0.85em;
+}
+
 .revision-badge {
     display: inline-block;
     margin: 2px 0 0 4px;
@@ -239,18 +254,24 @@ body {
     color: #fff;
 }
 
-.revision-badge.merged {
-    background: var(--vscode-testing-iconPassed, #73c991);
-    color: var(--vscode-editor-background);
-}
-
-.revision-badge.eligible {
-    border: 1px solid var(--vscode-charts-yellow, #cca700);
-    color: var(--vscode-charts-yellow, #cca700);
-}
-
 .log-entry.newer-than-local {
     border-left: 3px solid #ff9800;
+}
+
+.selection-box {
+    position: fixed;
+    z-index: 1000;
+    pointer-events: none;
+    border: 1px solid var(--vscode-focusBorder);
+    background-color: rgba(0, 122, 204, 0.18);
+    background-color: color-mix(in srgb, var(--vscode-list-activeSelectionBackground) 35%, transparent);
+}
+
+body.box-selecting,
+body.box-selecting .log-list,
+body.box-selecting .log-entry {
+    user-select: none;
+    cursor: crosshair;
 }
 
 /* 自定义右键菜单 */

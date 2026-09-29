@@ -1177,8 +1177,8 @@ export class SvnLogPanel {
                         await this._loadLogs();
                         break;
                     case 'viewFileDiff':
-                        this._log(`查看文件差异: 路径=${message.path}, 修订版本=${message.revision}`);
-                        await this._viewFileDiff(message.path, message.revision);
+                        this._log(`查看文件差异: 路径=${message.path}, 修订版本=${message.oldRevision || Number(message.revision) - 1}:${message.revision}`);
+                        await this._viewFileDiff(message.path, message.revision, message.oldRevision);
                         break;
                     case 'filterLogs':
                         this._log(`筛选日志: 修订版本=${message.revision || '无'}, 作者=${message.author || '无'}, 内容=${message.content || '无'}, 起始日期=${message.startDate || '无'}, 结束日期=${message.endDate || '无'}, 使用日期=${message.useDate || false}`);
@@ -1310,10 +1310,9 @@ export class SvnLogPanel {
     /**
      * 查看文件差异
      */
-    private async _viewFileDiff(filePath: string, revision: string) {
+    private async _viewFileDiff(filePath: string, revision: string, oldRevision?: string) {
         try {
-            // 获取前一个版本号
-            const prevRevision = parseInt(revision) - 1;
+            const prevRevision = oldRevision ? parseInt(oldRevision, 10) : parseInt(revision, 10) - 1;
             this._log(`查看文件差异: 路径=${filePath}, 版本=${prevRevision}:${revision}`);
             
             // 显示加载中状态

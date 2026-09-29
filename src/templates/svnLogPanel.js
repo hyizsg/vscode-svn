@@ -64,6 +64,9 @@
     let eligibleRevisions = new Set();
     let logEntries = [];
     let currentHasMoreLogs = false;
+    let lastClickedRevision = null;
+    let dragSelection = null;
+    let suppressNextRowClick = false;
     
     // 辅助函数：获取路径的最后一部分（文件名或目录名）
     function basename(path) {
@@ -121,8 +124,82 @@
         return Array.from(selectedRevisions).sort((left, right) => Number(left) - Number(right));
     }
 
-    function syncSelectedRevisions() {
-        vscode.postMessage({ command: 'selectRevisions', revisions: selectedRevisionArray() });
+    function aggregateSelectedDetails() {
+        const entries = logEntries
+            .filter(entry => selectedRevisions.has(String(entry.revision)))
+            .sort((left, right) => Number(left.revision) - Number(right.revision));
+        if (entries.length < 2) return entries[0] || null;
+
+        const changes = new Map();
+        entries.forEach(entry => {
+            const revision = Number(entry.revision);
+            (entry.paths || []).forEach(item => {
+                const existing = changes.get(item.path);
+                if (existing) {
+                    existing.lastAction = item.action;
+                    existing.newRevision = revision;
+                    existing.sawAdd = existing.sawAdd || item.action === 'A';
+                    existing.sawDelete = existing.sawDelete || item.action === 'D';
+                    existing.sawReplace = existing.sawReplace || item.action === 'R';
+                } else {
+                    changes.set(item.path, {
+                        path: item.path,
+                        firstAction: item.action,
+                        lastAction: item.action,
+                        oldRevision: revision - 1,
+                        newRevision: revision,
+                        sawAdd: item.action === 'A',
+                        sawDelete: item.action === 'D',
+                        sawReplace: item.action === 'R'
+                    });
+                }
+            });
+        });
+
+        const paths = [];
+        changes.forEach(item => {
+            if (item.firstAction === 'A' && item.lastAction === 'D') return;
+            let action = 'M';
+            if (item.lastAction === 'D') action = 'D';
+            else if (item.firstAction === 'A') action = 'A';
+            else if (item.sawReplace || (item.sawDelete && item.sawAdd)) action = 'R';
+            paths.push({
+                action,
+                path: item.path,
+                oldRevision: item.oldRevision,
+                newRevision: item.newRevision
+            });
+        });
+        paths.sort((left, right) => left.path.localeCompare(right.path));
+
+        const revisions = entries.map(entry => String(entry.revision));
+        const authors = Array.from(new Set(entries.map(entry => entry.author).filter(Boolean)));
+        return {
+            isAggregate: true,
+            revision: revisions[revisions.length - 1],
+            revisions,
+            author: authors.join('、'),
+            date: entries[0].date + ' — ' + entries[entries.length - 1].date,
+            message: entries.map(entry => 'r' + entry.revision + ': ' + (entry.message || '无提交信息')).join('\n\n'),
+            paths
+        };
+    }
+
+    function syncSelectedRevisions(preferredRevision) {
+        const revisions = selectedRevisionArray();
+        if (preferredRevision && selectedRevisions.has(String(preferredRevision))) {
+            selectedRevision = String(preferredRevision);
+        } else if (selectedRevision && !selectedRevisions.has(String(selectedRevision))) {
+            selectedRevision = revisions.length > 0 ? revisions[revisions.length - 1] : null;
+        }
+
+        if (revisions.length === 1) {
+            selectedRevision = revisions[0];
+            vscode.postMessage({ command: 'selectRevision', revision: revisions[0], revisions });
+        } else {
+            vscode.postMessage({ command: 'selectRevisions', revisions });
+            renderRevisionDetails(revisions.length > 1 ? aggregateSelectedDetails() : null);
+        }
         showSelectedRevisionButtons();
     }
     
@@ -329,6 +406,11 @@
                 selectedRevision = message.selectedRevision || null;
                 selectedRevisions = new Set((message.selectedRevisions || []).map(String));
                 renderLogList(getVisibleLogEntries(), message.isLoadingMore, currentHasMoreLogs);
+                if (selectedRevisions.size > 1) {
+                    renderRevisionDetails(aggregateSelectedDetails());
+                } else if (selectedRevisions.size === 0) {
+                    renderRevisionDetails(null);
+                }
                 showSelectedRevisionButtons();
                 break;
             case 'updateSvnRelativePath':
@@ -349,6 +431,9 @@
                 break;
             case 'showRevisionDetails':
                 debugLog('显示修订版本详情: ' + message.revision);
+                if (selectedRevisions.size !== 1 || !selectedRevisions.has(String(message.revision))) {
+                    break;
+                }
                 if (message.details && message.details.paths) {
                     debugLog('路径数量: ' + message.details.paths.length);
                 } else {
@@ -476,18 +561,13 @@
             const isActive = revision === selectedRevision;
             const isChecked = selectedRevisions.has(revision);
             const isNewerThanLocal = entry.isNewerThanLocal;
-            const revisionNumber = Number(revision);
-            const isMerged = mergedRevisions.has(revisionNumber);
-            const isEligible = eligibleRevisions.has(revisionNumber);
+            const isMerged = mergedRevisions.has(Number(revision));
             const msgPreview = escapeHtml((entry.message || '').replace(/\n/g, ' ').substring(0, 80));
             const newerBadge = isNewerThanLocal ? '<span class="revision-badge newer">未更新</span>' : '';
-            const mergeBadge = isMerged
-                ? '<span class="revision-badge merged">已合并</span>'
-                : (isEligible ? '<span class="revision-badge eligible">未合并</span>' : '');
 
-            html += '<div class="log-entry ' + (isActive ? 'active ' : '') + (isChecked ? 'selected ' : '') + (isNewerThanLocal ? 'newer-than-local' : '') + '" data-revision="' + escapeHtml(revision) + '" data-message="' + escapeHtml(entry.message) + '">' +
+            html += '<div class="log-entry ' + (isActive ? 'active ' : '') + (isChecked ? 'selected ' : '') + (isMerged ? 'merged ' : '') + (isNewerThanLocal ? 'newer-than-local' : '') + '" data-revision="' + escapeHtml(revision) + '" data-message="' + escapeHtml(entry.message) + '">' +
                 '<div class="log-select-cell"><input type="checkbox" class="log-select-checkbox" ' + (isChecked ? 'checked' : '') + ' title="选择 r' + escapeHtml(revision) + '"></div>' +
-                '<div class="log-revision-cell">r' + escapeHtml(revision) + newerBadge + mergeBadge + '</div>' +
+                '<div class="log-revision-cell">r' + escapeHtml(revision) + newerBadge + '</div>' +
                 '<div class="log-meta-row"><span>' + escapeHtml(entry.author) + '</span><span>' + escapeHtml(entry.date) + '</span></div>' +
                 '<div class="log-message-row" title="' + escapeHtml(entry.message) + '">' + msgPreview + '</div>' +
             '</div>';
@@ -508,35 +588,51 @@
 
         document.querySelectorAll('.log-entry').forEach(entryElement => {
             const checkbox = entryElement.querySelector('.log-select-checkbox');
+            const revision = entryElement.getAttribute('data-revision');
+
             checkbox.addEventListener('click', event => {
                 event.stopPropagation();
-                const revision = entryElement.getAttribute('data-revision');
-                if (checkbox.checked) selectedRevisions.add(revision);
-                else selectedRevisions.delete(revision);
-                syncSelectedRevisions();
+                if (event.shiftKey && lastClickedRevision && lastClickedRevision !== revision) {
+                    applyShiftRange(lastClickedRevision, revision, checkbox.checked);
+                } else if (checkbox.checked) {
+                    selectedRevisions.add(revision);
+                } else {
+                    selectedRevisions.delete(revision);
+                }
+                lastClickedRevision = revision;
+                syncSelectedRevisions(revision);
                 renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
             });
 
-            entryElement.addEventListener('click', () => {
-                const revision = entryElement.getAttribute('data-revision');
+            entryElement.addEventListener('click', event => {
+                if (suppressNextRowClick) {
+                    suppressNextRowClick = false;
+                    return;
+                }
+                const additive = event.ctrlKey || event.metaKey;
+                if (event.shiftKey && lastClickedRevision && lastClickedRevision !== revision) {
+                    applyShiftRange(lastClickedRevision, revision, true);
+                } else if (additive && selectedRevisions.has(revision)) {
+                    selectedRevisions.delete(revision);
+                } else {
+                    selectedRevisions.add(revision);
+                }
                 selectedRevision = revision;
-                selectedRevisions.add(revision);
+                lastClickedRevision = revision;
                 debugLog('选择修订版本: ' + revision);
-                vscode.postMessage({ command: 'selectRevision', revision, revisions: selectedRevisionArray() });
+                syncSelectedRevisions(revision);
                 renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
-                showSelectedRevisionButtons();
             });
 
             entryElement.addEventListener('contextmenu', event => {
                 event.preventDefault();
                 event.stopPropagation();
-                const revision = entryElement.getAttribute('data-revision');
                 const message = entryElement.getAttribute('data-message') || '';
                 selectedRevision = revision;
                 selectedRevisions.add(revision);
-                vscode.postMessage({ command: 'selectRevision', revision, revisions: selectedRevisionArray() });
+                lastClickedRevision = revision;
+                syncSelectedRevisions(revision);
                 renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
-                showSelectedRevisionButtons();
 
                 createContextMenu(event.clientX, event.clientY, [
                     { icon: '📄', label: '与前一版本比较 (Show Changes)', action: () => vscode.postMessage({ command: 'viewRevisionDiff', revision }) },
@@ -561,6 +657,117 @@
             if (activeEntry) activeEntry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
     }
+
+    function applyShiftRange(fromRevision, toRevision, checked) {
+        const visible = getVisibleLogEntries();
+        const fromIndex = visible.findIndex(entry => String(entry.revision) === String(fromRevision));
+        const toIndex = visible.findIndex(entry => String(entry.revision) === String(toRevision));
+        if (fromIndex === -1 || toIndex === -1) {
+            if (checked) selectedRevisions.add(String(toRevision));
+            else selectedRevisions.delete(String(toRevision));
+            return;
+        }
+        const start = Math.min(fromIndex, toIndex);
+        const end = Math.max(fromIndex, toIndex);
+        for (let index = start; index <= end; index++) {
+            const revision = String(visible[index].revision);
+            if (checked) selectedRevisions.add(revision);
+            else selectedRevisions.delete(revision);
+        }
+    }
+
+    function updateSelectionVisuals() {
+        document.querySelectorAll('.log-entry').forEach(row => {
+            const revision = row.getAttribute('data-revision');
+            const checked = selectedRevisions.has(revision);
+            row.classList.toggle('selected', checked);
+            row.classList.toggle('active', revision === selectedRevision);
+            const checkbox = row.querySelector('.log-select-checkbox');
+            if (checkbox) checkbox.checked = checked;
+        });
+        const selectAll = document.getElementById('selectAllLogs');
+        if (selectAll) {
+            const visible = getVisibleLogEntries();
+            const selectedCount = visible.filter(entry => selectedRevisions.has(String(entry.revision))).length;
+            selectAll.checked = visible.length > 0 && selectedCount === visible.length;
+            selectAll.indeterminate = selectedCount > 0 && selectedCount < visible.length;
+        }
+        showSelectedRevisionButtons();
+    }
+
+    function intersects(first, second) {
+        return first.left <= second.right && first.right >= second.left &&
+            first.top <= second.bottom && first.bottom >= second.top;
+    }
+
+    logList.addEventListener('mousedown', event => {
+        if (event.button !== 0 || event.target.closest('input, button, .log-list-columns')) return;
+        const bounds = logList.getBoundingClientRect();
+        const startX = Math.max(bounds.left, Math.min(event.clientX, bounds.right));
+        const startY = Math.max(bounds.top, Math.min(event.clientY, bounds.bottom));
+        const box = document.createElement('div');
+        box.className = 'selection-box';
+        box.style.display = 'none';
+        document.body.appendChild(box);
+        dragSelection = {
+            startX,
+            startY,
+            bounds,
+            box,
+            base: event.ctrlKey || event.metaKey ? new Set(selectedRevisions) : new Set(),
+            moved: false,
+            lastHit: null
+        };
+        event.preventDefault();
+    });
+
+    document.addEventListener('mousemove', event => {
+        if (!dragSelection) return;
+        const currentX = Math.max(dragSelection.bounds.left, Math.min(event.clientX, dragSelection.bounds.right));
+        const currentY = Math.max(dragSelection.bounds.top, Math.min(event.clientY, dragSelection.bounds.bottom));
+        if (!dragSelection.moved && Math.hypot(currentX - dragSelection.startX, currentY - dragSelection.startY) < 4) return;
+
+        dragSelection.moved = true;
+        document.body.classList.add('box-selecting');
+        const selectionRect = {
+            left: Math.min(dragSelection.startX, currentX),
+            right: Math.max(dragSelection.startX, currentX),
+            top: Math.min(dragSelection.startY, currentY),
+            bottom: Math.max(dragSelection.startY, currentY)
+        };
+        dragSelection.box.style.display = 'block';
+        dragSelection.box.style.left = selectionRect.left + 'px';
+        dragSelection.box.style.top = selectionRect.top + 'px';
+        dragSelection.box.style.width = Math.max(1, selectionRect.right - selectionRect.left) + 'px';
+        dragSelection.box.style.height = Math.max(1, selectionRect.bottom - selectionRect.top) + 'px';
+
+        selectedRevisions = new Set(dragSelection.base);
+        dragSelection.lastHit = null;
+        document.querySelectorAll('.log-entry').forEach(row => {
+            if (intersects(selectionRect, row.getBoundingClientRect())) {
+                const revision = row.getAttribute('data-revision');
+                selectedRevisions.add(revision);
+                dragSelection.lastHit = revision;
+            }
+        });
+        if (dragSelection.lastHit) selectedRevision = dragSelection.lastHit;
+        updateSelectionVisuals();
+    });
+
+    document.addEventListener('mouseup', () => {
+        if (!dragSelection) return;
+        const selection = dragSelection;
+        dragSelection = null;
+        selection.box.remove();
+        document.body.classList.remove('box-selecting');
+        if (!selection.moved) return;
+
+        suppressNextRowClick = true;
+        setTimeout(() => { suppressNextRowClick = false; }, 0);
+        if (selection.lastHit) lastClickedRevision = selection.lastHit;
+        syncSelectedRevisions(selection.lastHit);
+        renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
+    });
     
     // 渲染修订版本详情
     function renderRevisionDetails(details) {
@@ -578,30 +785,37 @@
         
         // 创建详情内容容器
         let html = `<div class="detail-content-container">`;
+        const isAggregate = details.isAggregate === true;
+        const revisions = details.revisions || [String(details.revision)];
+        const revisionTitle = isAggregate
+            ? '已选 ' + revisions.length + ' 个版本（r' + revisions[0] + ' — r' + revisions[revisions.length - 1] + '）的最终变化'
+            : '修订版本 ' + escapeHtml(details.revision);
         
         // 添加详情头部，包含版本对比信息
         const isNewerThanLocal = details.isNewerThanLocal;
-        const versionCompareInfo = localRevision && details.revision ? 
-            (isNewerThanLocal ? 
-                `<span style="color: #ff9800; font-weight: bold;">此版本 (r${details.revision}) 尚未更新到本地 (r${localRevision})</span>` : 
-                `<span>此版本 (r${details.revision}) 已包含在本地版本 (r${localRevision}) 中</span>`) : 
+        const versionCompareInfo = !isAggregate && localRevision && details.revision ?
+            (isNewerThanLocal ?
+                `<span style="color: #ff9800; font-weight: bold;">此版本 (r${escapeHtml(details.revision)}) 尚未更新到本地 (r${escapeHtml(localRevision)})</span>` :
+                `<span>此版本 (r${escapeHtml(details.revision)}) 已包含在本地版本 (r${escapeHtml(localRevision)}) 中</span>`) :
             '';
+        const detailActions = isAggregate ? '' : `
+            <div class="detail-actions" style="margin-top: 10px;">
+                <button id="aiAnalysisButton" class="ai-analysis-button" data-revision="${escapeHtml(details.revision)}">
+                    🤖 AI分析代码差异
+                </button>
+            </div>`;
         
         html += `
             <div class="detail-header">
-                <div class="detail-title">修订版本 ${details.revision}</div>
+                <div class="detail-title">${revisionTitle}</div>
                 <div class="detail-info">
-                    <span>作者: ${details.author}</span>
-                    <span>日期: ${details.date}</span>
+                    <span>作者: ${escapeHtml(details.author)}</span>
+                    <span>日期: ${escapeHtml(details.date)}</span>
                 </div>
                 ${versionCompareInfo ? `<div style="margin-top: 5px;">${versionCompareInfo}</div>` : ''}
-                <div class="detail-actions" style="margin-top: 10px;">
-                    <button id="aiAnalysisButton" class="ai-analysis-button" data-revision="${details.revision}">
-                        🤖 AI分析代码差异
-                    </button>
-                </div>
+                ${detailActions}
             </div>
-            <div class="detail-message">${details.message}</div>
+            <div class="detail-message">${escapeHtml(details.message)}</div>
         `;
         
         // 添加文件列表
@@ -612,7 +826,7 @@
                 <div class="file-list-container">
                     <div class="file-list-header">
                         <div class="file-list-title-container">
-                            <span class="file-list-title">变更文件列表</span>
+                            <span class="file-list-title">${isAggregate ? '最终变化文件列表' : '变更文件列表'}</span>
                             <span class="file-count">共 ${details.paths.length} 个文件</span>
                         </div>
                         <div class="file-list-filter">
@@ -749,18 +963,22 @@
                     debugLog('文件模式，不高亮相对路径');
                 }
                 
-                // 只有修改和添加的文件才能查看差异
-                const canViewDiff = path.action === 'M' || path.action === 'A';
+                const canViewDiff = isAggregate
+                    ? path.action === 'M' || path.action === 'R'
+                    : path.action === 'M' || path.action === 'A';
+                const rangeAttributes = isAggregate
+                    ? ` data-old-revision="${path.oldRevision}" data-new-revision="${path.newRevision}"`
+                    : '';
                 
                 html += `
-                    <div class="path-item" data-related="${path.isRelated ? 'true' : 'false'}">
+                    <div class="path-item" data-related="${path.isRelated ? 'true' : 'false'}"${rangeAttributes}>
                         <div class="path-action ${path.action}" title="${actionLabel}">${path.action}</div>
-                        <div class="path-filename" title="${fileName}">${fileNameHtml}</div>
-                        <div class="path-filepath" title="${relativePath}">${relativePathHtml}</div>
+                        <div class="path-filename" title="${escapeHtml(fileName)}">${fileNameHtml}</div>
+                        <div class="path-filepath" title="${escapeHtml(relativePath)}">${relativePathHtml}</div>
                         <div class="path-detail">
-                            ${canViewDiff ? 
-                                `<button class="detail-button" data-path="${path.path}" data-revision="${details.revision}">显示差异</button>` : 
-                                `<button class="detail-button" disabled>显示差异</button>`
+                            ${canViewDiff ?
+                                `<button class="detail-button" data-path="${escapeHtml(path.path)}" data-revision="${escapeHtml(details.revision)}"${rangeAttributes}>${isAggregate ? '最终差异' : '显示差异'}</button>` :
+                                `<button class="detail-button" disabled>${isAggregate ? '最终差异' : '显示差异'}</button>`
                             }
                         </div>
                     </div>
@@ -791,8 +1009,10 @@
                 e.stopPropagation();
                 const path = button.getAttribute('data-path');
                 const revision = button.getAttribute('data-revision');
-                debugLog('点击显示差异按钮: 路径=' + path + ', 修订版本=' + revision);
-                vscode.postMessage({ command: 'viewFileDiff', path: path, revision: revision });
+                const oldRevision = button.getAttribute('data-old-revision');
+                const newRevision = button.getAttribute('data-new-revision');
+                debugLog('点击显示差异按钮: 路径=' + path + ', 修订版本=' + (oldRevision ? oldRevision + ':' + newRevision : revision));
+                vscode.postMessage({ command: 'viewFileDiff', path, revision: newRevision || revision, oldRevision });
             });
         });
         
@@ -805,11 +1025,12 @@
                 const actionEl = item.querySelector('.path-action');
                 const filePath = filepathEl ? (filepathEl.getAttribute('title') || filepathEl.textContent.trim()) : '';
                 const action = actionEl ? actionEl.textContent.trim() : '';
-                const revision = details.revision;
-                const canDiff = (action === 'M' || action === 'A');
+                const oldRevision = item.getAttribute('data-old-revision');
+                const revision = item.getAttribute('data-new-revision') || details.revision;
+                const canDiff = isAggregate ? (action === 'M' || action === 'R') : (action === 'M' || action === 'A');
                 
                 createContextMenu(e.clientX, e.clientY, [
-                    { icon: '📄', label: '显示差异', disabled: !canDiff, action: () => vscode.postMessage({ command: 'viewFileDiff', path: filePath, revision: revision }) },
+                    { icon: '📄', label: isAggregate ? '显示最终差异' : '显示差异', disabled: !canDiff, action: () => vscode.postMessage({ command: 'viewFileDiff', path: filePath, revision, oldRevision }) },
                     { icon: '🔄', label: '与工作副本比较', action: () => vscode.postMessage({ command: 'compareFileWithWorking', path: filePath, revision: revision }) },
                     { icon: '👁️', label: '查看此版本文件', action: () => vscode.postMessage({ command: 'viewFileAtRevision', path: filePath, revision: revision }) },
                     { icon: '👤', label: 'Blame（注释）', action: () => vscode.postMessage({ command: 'blameFileAtRevision', path: filePath, revision: revision }) },
