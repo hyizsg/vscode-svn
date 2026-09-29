@@ -682,8 +682,12 @@ button:hover {
 }
 
 input[type="date"].filter-input {
-    width: 140px;
+    width: 120px;
     padding: 4px 8px;
+}
+
+#revisionFilter {
+    width: 90px;
 }
 
 .filter-group {
