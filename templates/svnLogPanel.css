@@ -460,14 +460,9 @@ body {
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 6px;
     overflow: hidden;
     white-space: nowrap;
-}
-
-#targetNameInfo {
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 
 .log-count-info {
@@ -475,10 +470,11 @@ body {
     font-size: 0.9em;
 }
 
-.log-footer-navigation {
+.log-footer-navigation,
+#loadMoreControl {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
 }
 
 .log-footer-navigation button {

@@ -5,10 +5,10 @@
     const loading = document.getElementById('loading');
     const refreshButton = document.getElementById('refreshButton');
     const loadMoreButton = document.getElementById('loadMoreButton');
+    const loadMoreControl = document.getElementById('loadMoreControl');
     const generatePatchButton = document.getElementById('generatePatchButton');
     const mergeOutputSection = document.getElementById('mergeOutputSection');
     const mergeOutput = document.getElementById('mergeOutput');
-    const targetNameInfo = document.getElementById('targetNameInfo');
     const localRevisionInfo = document.getElementById('localRevisionInfo');
     const localRevisionNumber = document.getElementById('localRevisionNumber');
     
@@ -144,14 +144,8 @@
         
         // 更新底部栏中的数量信息
         if (logCountInfo) {
-            let countText = '';
-            if (isFiltered) {
-                countText = '(筛选结果: ' + count + ' 条)';
-            } else {
-                countText = '(显示: ' + count + ' 条)';
-            }
-            logCountInfo.textContent = countText;
-            logCountInfo.style.color = isFiltered ? 'var(--vscode-notificationsWarningIcon-foreground)' : 'var(--vscode-descriptionForeground)';
+            logCountInfo.textContent = '(显示: ' + count + ' 条)';
+            logCountInfo.style.color = 'var(--vscode-descriptionForeground)';
         }
         
         // 更新日志列表头部信息
@@ -314,9 +308,6 @@
             case 'updateTargetName':
                 debugLog('更新目标路径名称: ' + message.targetName);
                 targetName = message.targetName;
-                if (targetNameInfo) {
-                    targetNameInfo.textContent = 'SVN日志: ' + message.targetName;
-                }
                 break;
             case 'updateTargetPath':
                 debugLog('更新目标路径: ' + message.targetPath);
@@ -423,7 +414,7 @@
             
         // 加载更多时保存当前滚动位置
         var savedScrollTop = isLoadingMore ? logList.scrollTop : 0;
-        loadMoreButton.style.display = entries && entries.length > 0 && hasMoreLogs !== false ? 'inline-block' : 'none';
+        loadMoreControl.style.display = entries && entries.length > 0 && hasMoreLogs !== false ? 'inline-flex' : 'none';
         if (!entries || entries.length === 0) {
             logList.innerHTML = `
                 <div class="empty-state">

@@ -88,12 +88,11 @@
 
     <div class="log-footer">
         <div class="log-footer-info">
-            <span id="targetNameInfo">SVN日志: {{TARGET_NAME}}</span>
-            <span id="logCountInfo" class="log-count-info"></span>
             <span class="log-footer-navigation">
                 <button id="refreshButton">刷新</button>
-                <button id="loadMoreButton" style="display:none;">加载更多</button>
+                <span id="loadMoreControl" style="display:none;"><span class="log-footer-separator">-</span><button id="loadMoreButton">加载更多</button></span>
             </span>
+            <span id="logCountInfo" class="log-count-info"></span>
         </div>
         <div class="log-footer-actions">
             <button id="changeMergeTargetButton" class="secondary-button" style="display:none;" title="切换要合并到的分支目录">切换目录</button>
