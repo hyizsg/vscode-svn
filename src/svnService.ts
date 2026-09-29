@@ -3162,10 +3162,15 @@ export class SvnService {
   /**
    * 获取已合并的版本号列表
    */
-  public async getMergedRevisions(workingDir: string, sourceUrl: string): Promise<Set<number>> {
+  public async getMergedRevisions(
+    workingDir: string,
+    sourceUrl: string,
+    revisionRange?: { start: number; end: number }
+  ): Promise<Set<number>> {
     try {
+      const rangeArgument = revisionRange ? ` -r ${revisionRange.start}:${revisionRange.end}` : '';
       const result = await this.executeSvnCommand(
-        `mergeinfo --show-revs merged "${sourceUrl}"`, workingDir
+        `mergeinfo --show-revs merged${rangeArgument} "${sourceUrl}"`, workingDir
       );
       const revs = new Set<number>();
       result.split('\n').forEach(line => {
