@@ -4,6 +4,7 @@
     const logDetails = document.getElementById('logDetails');
     const loading = document.getElementById('loading');
     const refreshButton = document.getElementById('refreshButton');
+    const loadMoreButton = document.getElementById('loadMoreButton');
     const generatePatchButton = document.getElementById('generatePatchButton');
     const mergeOutputSection = document.getElementById('mergeOutputSection');
     const mergeOutput = document.getElementById('mergeOutput');
@@ -141,19 +142,13 @@
     function updateLogCountDisplay(count, isFiltered, hasMoreLogs, filterDescription) {
         debugLog('更新日志数量显示: count=' + count + ', isFiltered=' + isFiltered + ', hasMoreLogs=' + hasMoreLogs + ', filterDescription=' + (filterDescription || '无'));
         
-        // 更新工具栏中的数量信息
+        // 更新底部栏中的数量信息
         if (logCountInfo) {
             let countText = '';
             if (isFiltered) {
                 countText = '(筛选结果: ' + count + ' 条)';
-                if (hasMoreLogs) {
-                    countText += ' 可加载更多';
-                }
             } else {
                 countText = '(显示: ' + count + ' 条)';
-                if (hasMoreLogs) {
-                    countText += ' 可加载更多';
-                }
             }
             logCountInfo.textContent = countText;
             logCountInfo.style.color = isFiltered ? 'var(--vscode-notificationsWarningIcon-foreground)' : 'var(--vscode-descriptionForeground)';
@@ -428,6 +423,7 @@
             
         // 加载更多时保存当前滚动位置
         var savedScrollTop = isLoadingMore ? logList.scrollTop : 0;
+        loadMoreButton.style.display = entries && entries.length > 0 && hasMoreLogs !== false ? 'inline-block' : 'none';
         if (!entries || entries.length === 0) {
             logList.innerHTML = `
                 <div class="empty-state">
@@ -454,11 +450,6 @@
             '</div>';
         });
         
-        if (hasMoreLogs !== false) {
-            html += '<div class="load-more"><button id="loadMoreButton">加载更多</button></div>';
-        } else {
-            html += '<div class="load-more" style="color:var(--vscode-descriptionForeground);padding:8px;text-align:center;">已加载全部历史记录</div>';
-        }
         logList.innerHTML = html;
         debugLog('日志列表渲染完成');
         
@@ -510,15 +501,6 @@
             if (selectedEntry) {
                 selectedEntry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
             }
-        }
-        
-        // 加载更多按钮
-        const loadMoreButton = document.getElementById('loadMoreButton');
-        if (loadMoreButton) {
-            loadMoreButton.addEventListener('click', () => {
-                debugLog('点击加载更多按钮');
-                vscode.postMessage({ command: 'loadMoreLogs', limit: 100 });
-            });
         }
     }
     
@@ -975,6 +957,11 @@
         vscode.postMessage({
             command: 'refresh'
         });
+    });
+
+    loadMoreButton.addEventListener('click', () => {
+        debugLog('点击加载更多按钮');
+        vscode.postMessage({ command: 'loadMoreLogs', limit: 100 });
     });
 
     generatePatchButton.addEventListener('click', () => {

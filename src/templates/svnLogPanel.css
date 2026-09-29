@@ -416,20 +416,6 @@ body {
     font-size: 1.2em;
 }
 
-.toolbar {
-    padding: 10px;
-    display: flex;
-    justify-content: space-between;
-    border-bottom: 1px solid var(--vscode-panel-border);
-    height: 20px;
-}
-
-.toolbar-actions {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
 .merge-output-section {
     flex: 1;
     min-height: 0;
@@ -489,6 +475,16 @@ body {
     font-size: 0.9em;
 }
 
+.log-footer-navigation {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.log-footer-navigation button {
+    padding: 4px 10px;
+}
+
 .log-footer-actions {
     display: flex;
     align-items: center;
@@ -535,10 +531,10 @@ body {
     display: none;
 }
 
-body.merging .toolbar,
 body.merging .local-revision-info,
 body.merging .filter-form,
-body.merging .container {
+body.merging .container,
+body.merging .log-footer-navigation {
     display: none;
 }
 
@@ -571,12 +567,6 @@ button:hover {
 .empty-icon {
     font-size: 3em;
     margin-bottom: 10px;
-}
-
-.load-more {
-    text-align: center;
-    padding: 10px;
-    margin-top: 10px;
 }
 
 .highlight {

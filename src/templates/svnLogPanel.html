@@ -7,12 +7,6 @@
     <link rel="stylesheet" href="{{STYLE_URI}}">
 </head>
 <body>
-    <div class="toolbar">
-        <div class="toolbar-actions">
-            <button id="refreshButton">刷新</button>
-        </div>
-    </div>
-    
     <!-- 本地版本信息 -->
     <div class="local-revision-info" id="localRevisionInfo" style="display: none;">
         <div>
@@ -96,6 +90,10 @@
         <div class="log-footer-info">
             <span id="targetNameInfo">SVN日志: {{TARGET_NAME}}</span>
             <span id="logCountInfo" class="log-count-info"></span>
+            <span class="log-footer-navigation">
+                <button id="refreshButton">刷新</button>
+                <button id="loadMoreButton" style="display:none;">加载更多</button>
+            </span>
         </div>
         <div class="log-footer-actions">
             <button id="changeMergeTargetButton" class="secondary-button" style="display:none;" title="切换要合并到的分支目录">切换目录</button>
