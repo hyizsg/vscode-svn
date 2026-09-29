@@ -835,13 +835,22 @@
                 vscode.postMessage({ command: 'commitMerge' });
             });
         }
+        const generatePatchBtn = document.getElementById('generatePatchButton');
+        if (generatePatchBtn) {
+            generatePatchBtn.addEventListener('click', () => {
+                if (generatePatchBtn.disabled) return;
+                generatePatchBtn.disabled = true;
+                generatePatchBtn.textContent = '生成中...';
+                vscode.postMessage({ command: 'generatePatch' });
+            });
+        }
     }
 
     // 统一控制输出区底部按钮组的显隐；visibleIds 中的按钮显示，其余隐藏
     const OUTPUT_FOOTER_BUTTONS = [
         'changeMergeTargetButton', 'mergeToBranchButton',
         'resolveMergeConflictsButton', 'commitMergeButton', 'retryCommitMergeButton',
-        'cancelCommitButton', 'closeCommitPanelButton'
+        'generatePatchButton', 'cancelCommitButton', 'closeCommitPanelButton'
     ];
     function setFooterButtons(visibleIds) {
         const visible = new Set(visibleIds);
@@ -881,7 +890,7 @@
     function showCommitDoneButtons() {
         const ids = [];
         if (lastCommittedRevision) {
-            ids.push('changeMergeTargetButton', 'mergeToBranchButton');
+            ids.push('generatePatchButton', 'changeMergeTargetButton', 'mergeToBranchButton');
         }
         ids.push('closeCommitPanelButton');
         setFooterButtons(ids);
@@ -960,6 +969,22 @@
             case 'mergeFinished':
                 onMergeFinished(message.success === true, message.hasConflicts === true, message.commitFailed === true);
                 break;
+            case 'patchGenerationStarted': {
+                const button = document.getElementById('generatePatchButton');
+                if (button) {
+                    button.disabled = true;
+                    button.textContent = '生成中...';
+                }
+                break;
+            }
+            case 'patchGenerationFinished': {
+                const button = document.getElementById('generatePatchButton');
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '生成 patch';
+                }
+                break;
+            }
         }
     });
 
@@ -972,7 +997,7 @@
             return;
         }
         if (success) {
-            setFooterButtons(['closeCommitPanelButton']);
+            setFooterButtons(['generatePatchButton', 'closeCommitPanelButton']);
             return;
         }
         if (commitFailed) {

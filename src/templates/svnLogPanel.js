@@ -4,6 +4,7 @@
     const logDetails = document.getElementById('logDetails');
     const loading = document.getElementById('loading');
     const refreshButton = document.getElementById('refreshButton');
+    const generatePatchButton = document.getElementById('generatePatchButton');
     const localRevisionInfo = document.getElementById('localRevisionInfo');
     const localRevisionNumber = document.getElementById('localRevisionNumber');
     
@@ -274,6 +275,17 @@
                 }
                 
                 renderRevisionDetails(message.details);
+                generatePatchButton.style.display = 'inline-block';
+                generatePatchButton.disabled = false;
+                generatePatchButton.textContent = '生成 patch';
+                break;
+            case 'patchGenerationStarted':
+                generatePatchButton.disabled = true;
+                generatePatchButton.textContent = '生成中...';
+                break;
+            case 'patchGenerationFinished':
+                generatePatchButton.disabled = false;
+                generatePatchButton.textContent = '生成 patch';
                 break;
             case 'filterResult':
                 debugLog('筛选结果: ' + message.count + ' 条记录');
@@ -869,4 +881,11 @@
             command: 'refresh'
         });
     });
-})(); 
+
+    generatePatchButton.addEventListener('click', () => {
+        if (!selectedRevision || generatePatchButton.disabled) return;
+        generatePatchButton.disabled = true;
+        generatePatchButton.textContent = '生成中...';
+        vscode.postMessage({ command: 'generatePatch', revision: selectedRevision });
+    });
+})();

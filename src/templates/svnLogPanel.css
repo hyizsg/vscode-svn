@@ -419,6 +419,12 @@ body {
     height: 20px;
 }
 
+.toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 button {
     background-color: var(--vscode-button-background);
     color: var(--vscode-button-foreground);

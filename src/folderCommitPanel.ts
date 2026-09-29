@@ -8,6 +8,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { AiService } from './aiService';
 import { getOutputChannel } from './outputChannel';
+import { PatchGenerator } from './patchGenerator';
 
 interface FileStatus {
     path: string;
@@ -33,6 +34,7 @@ export class SvnFolderCommitPanel {
     // 维护已知的 changelist 名称集（含空 changelist），以便无文件时也显示
     private _knownChangelists: Set<string> = new Set();
     private readonly aiService: AiService;
+    private readonly patchGenerator: PatchGenerator;
     private outputChannel: vscode.OutputChannel;
     private readonly filterService: SvnFilterService;
     private readonly templateManager: TemplateManager;
@@ -96,6 +98,7 @@ export class SvnFolderCommitPanel {
     ) {
         this._panel = panel;
         this.aiService = new AiService();
+        this.patchGenerator = new PatchGenerator(this.svnService, this.aiService);
         this.filterService = new SvnFilterService();
         this.templateManager = new TemplateManager(extensionUri);
         this.outputChannel = getOutputChannel();
@@ -1051,6 +1054,19 @@ export class SvnFolderCommitPanel {
 
                     case 'commitMerge':
                         await this._commitMerge();
+                        return;
+
+                    case 'generatePatch':
+                        if (this._lastCommittedRevision) {
+                            this._panel.webview.postMessage({ command: 'patchGenerationStarted' });
+                            try {
+                                await this.patchGenerator.generateRevision(this._lastCommittedRevision, this.folderPath);
+                            } catch (error: any) {
+                                vscode.window.showErrorMessage(`生成 patch 失败: ${error.message}`);
+                            } finally {
+                                this._panel.webview.postMessage({ command: 'patchGenerationFinished' });
+                            }
+                        }
                         return;
                 }
             },

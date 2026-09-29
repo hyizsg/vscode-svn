@@ -7,6 +7,7 @@ import { TemplateManager } from './templateManager';
 import { AiService } from './aiService';
 import { AiCacheService } from './aiCacheService';
 import { getOutputChannel } from './outputChannel';
+import { PatchGenerator } from './patchGenerator';
 
 /**
  * SVN日志条目接口
@@ -41,6 +42,7 @@ export class SvnLogPanel {
     private _targetPath: string;
     private _targetSvnRelativePath: string = ''; // 存储文件夹的SVN相对路径
     private _outputChannel: vscode.OutputChannel;
+    private readonly patchGenerator: PatchGenerator;
     private _minLoadedRevision: string | null = null; // 记录已加载的最小版本号
     private _isInitialLoad: boolean = true; // 标记是否为初始加载
     private _localRevision: string | null = null; // 存储本地修订版本号
@@ -111,6 +113,7 @@ export class SvnLogPanel {
         this._outputChannel = getOutputChannel();
         this.templateManager = new TemplateManager(extensionUri);
         this.aiService = new AiService();
+        this.patchGenerator = new PatchGenerator(this.svnService, this.aiService);
         this.aiCacheService = AiCacheService.getInstance();
         this._log('SVN日志面板已创建，目标路径: ' + targetPath);
         this._minLoadedRevision = null; // 确保初始化为null
@@ -792,6 +795,9 @@ export class SvnLogPanel {
                         this._log(`选择修订版本: ${message.revision}`);
                         await this._showRevisionDetails(message.revision);
                         break;
+                    case 'generatePatch':
+                        await this._generatePatch(message.revision);
+                        break;
                     case 'loadMoreLogs':
                         this._log(`加载更多日志，限制: ${message.limit || 100}，最小已加载版本: ${this._minLoadedRevision || '无'}`);
                         
@@ -1234,6 +1240,23 @@ export class SvnLogPanel {
         }
     }
 
+    private async _generatePatch(revision: string): Promise<void> {
+        const entry = this._logEntries.find(item => item.revision === revision);
+        if (!entry) {
+            vscode.window.showErrorMessage(`未找到修订版本 r${revision}`);
+            return;
+        }
+        this._panel.webview.postMessage({ command: 'patchGenerationStarted' });
+        try {
+            await this.patchGenerator.generate(entry, this._targetPath);
+        } catch (error: any) {
+            this._log(`生成 patch 失败: ${error.message}`);
+            vscode.window.showErrorMessage(`生成 patch 失败: ${error.message}`);
+        } finally {
+            this._panel.webview.postMessage({ command: 'patchGenerationFinished' });
+        }
+    }
+
     /**
      * 获取Webview的HTML内容
      */
@@ -1524,6 +1547,11 @@ export class SvnLogPanel {
                     border-bottom: 1px solid var(--vscode-panel-border);
                     height: 20px;
                 }
+                .toolbar-actions {
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
                 button {
                     background-color: var(--vscode-button-background);
                     color: var(--vscode-button-foreground);
@@ -1667,8 +1695,9 @@ export class SvnLogPanel {
         </head>
         <body>
             <div class="toolbar">
-                <div>
+                <div class="toolbar-actions">
                     <button id="refreshButton">刷新</button>
+                    <button id="generatePatchButton" style="display:none;">生成 patch</button>
                 </div>
                 <div>
                     <span>SVN日志: ${targetName}</span>
@@ -1760,6 +1789,7 @@ export class SvnLogPanel {
                     const logDetails = document.getElementById('logDetails');
                     const loading = document.getElementById('loading');
                     const refreshButton = document.getElementById('refreshButton');
+                    const generatePatchButton = document.getElementById('generatePatchButton');
                     const localRevisionInfo = document.getElementById('localRevisionInfo');
                     const localRevisionNumber = document.getElementById('localRevisionNumber');
                     
@@ -1977,6 +2007,17 @@ export class SvnLogPanel {
                                 }
                                 
                                 renderRevisionDetails(message.details);
+                                generatePatchButton.style.display = 'inline-block';
+                                generatePatchButton.disabled = false;
+                                generatePatchButton.textContent = '生成 patch';
+                                break;
+                            case 'patchGenerationStarted':
+                                generatePatchButton.disabled = true;
+                                generatePatchButton.textContent = '生成中...';
+                                break;
+                            case 'patchGenerationFinished':
+                                generatePatchButton.disabled = false;
+                                generatePatchButton.textContent = '生成 patch';
                                 break;
                             case 'filterResult':
                                 debugLog('筛选结果: ' + message.count + ' 条记录');
@@ -2483,6 +2524,13 @@ export class SvnLogPanel {
                         vscode.postMessage({
                             command: 'refresh'
                         });
+                    });
+
+                    generatePatchButton.addEventListener('click', () => {
+                        if (!selectedRevision || generatePatchButton.disabled) return;
+                        generatePatchButton.disabled = true;
+                        generatePatchButton.textContent = '生成中...';
+                        vscode.postMessage({ command: 'generatePatch', revision: selectedRevision });
                     });
                 })();
             </script>

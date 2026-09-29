@@ -19,7 +19,10 @@ export class AiService {
    * 尝试使用 VS Code Language Model API（IDE 内置 AI）
    * 返回 null 表示不可用，需回退到手动配置
    */
-  private async tryLanguageModelApi(prompt: string): Promise<string | null> {
+  private async tryLanguageModelApi(
+    prompt: string,
+    instruction: string = '根据以下代码差异生成简洁准确的中文 SVN 提交日志，只输出提交日志内容。'
+  ): Promise<string | null> {
     try {
       // 检查 vscode.lm API 是否可用（VS Code 1.90+）
       if (!vscode.lm || typeof vscode.lm.selectChatModels !== 'function') {
@@ -87,29 +90,16 @@ export class AiService {
 
       this.outputChannel.appendLine(`[tryLanguageModelApi] 最终使用模型: ${model.name || model.id}, vendor: ${model.vendor || 'unknown'}, family: ${model.family || 'unknown'}`);
 
-      // 根据模型类型构建不同的 prompt
       const isEditModel = model.vendor === 'qoder-edit-lm-vendor';
-      let messages;
-      if (isEditModel) {
-        // 编辑模型：伪装成代码补全任务
-        messages = [
-          vscode.LanguageModelChatMessage.User(
-            `Complete the following code. The file is a commit message file. ` +
-            `Based on the diff below, write the commit message content in Chinese. ` +
-            `Output ONLY the commit message text, nothing else.`
-          ),
-          vscode.LanguageModelChatMessage.User(
-            `// Diff:\n${prompt}\n\n// Generated commit message:\n`
-          )
-        ];
-      } else {
-        // 通用聊天模型：标准 prompt
-        messages = [
-          vscode.LanguageModelChatMessage.User(
-            `根据以下代码差异，生成简洁的中文提交日志。只输出提交日志内容，不要解释。\n\n${prompt}`
-          )
-        ];
-      }
+      const messages = isEditModel
+        ? [
+            vscode.LanguageModelChatMessage.User(`Complete the requested text generation task. ${instruction}`),
+            vscode.LanguageModelChatMessage.User(prompt)
+          ]
+        : [
+            vscode.LanguageModelChatMessage.User(instruction),
+            vscode.LanguageModelChatMessage.User(prompt)
+          ];
 
       // 创建 cancellation token
       const cts = new vscode.CancellationTokenSource();
@@ -467,6 +457,27 @@ export class AiService {
     }
   }
 
+  public async generateText(prompt: string, instruction: string, progressTitle: string): Promise<string> {
+    const lmResult = await this.tryLanguageModelApi(prompt, instruction);
+    if (lmResult) {
+      return lmResult;
+    }
+
+    let aiConfig = this.checkAiConfig();
+    if (!aiConfig) {
+      aiConfig = await this.configureAI();
+      if (!aiConfig) {
+        return '';
+      }
+    }
+
+    return vscode.window.withProgress({
+      location: vscode.ProgressLocation.Notification,
+      title: progressTitle,
+      cancellable: false
+    }, () => this.callAiApi(prompt, aiConfig!, instruction, 12000));
+  }
+
   /**
    * 生成SVN提交日志
    * 优先使用 IDE 内置 AI（Qoder/Copilot），无需额外配置
@@ -630,14 +641,16 @@ ${truncatedDiff}
     }
   }
 
-  private callAiApi(prompt: string, config: { apiUrl: string; modelId: string; apiKey: string }): Promise<string> {
+  private callAiApi(
+    prompt: string,
+    config: { apiUrl: string; modelId: string; apiKey: string },
+    systemPrompt: string = '你是一个专业的代码提交信息生成助手。请根据提供的代码差异生成简洁、准确的中文提交信息。',
+    maxTokens: number = 2000
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
       // 解析URL，根据接口类型选择请求体格式
       const url = new URL(config.apiUrl);
       const isDashScopeNative = this.isDashScopeNativeApi(config.apiUrl);
-
-      // 系统消息 / 用户消息
-      const systemPrompt = '你是一个专业的代码提交信息生成助手。请根据提供的代码差异生成简洁、准确的中文提交信息。';
 
       // 构建请求体：
       // - DashScope 原生接口（/api/v1/services/aigc/text-generation/generation）使用 input.messages + parameters 格式
@@ -654,7 +667,7 @@ ${truncatedDiff}
           },
           parameters: {
             temperature: 0.7,
-            max_tokens: 2000,
+            max_tokens: maxTokens,
             result_format: 'message'
           }
         });
@@ -667,7 +680,7 @@ ${truncatedDiff}
             { role: 'user', content: prompt }
           ],
           temperature: 0.7,
-          max_tokens: 2000
+          max_tokens: maxTokens
         });
       }
 
