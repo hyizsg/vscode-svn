@@ -288,7 +288,6 @@ export class PatchGenerator {
         mappings: PatchPathMappings
     ): Promise<string> {
         const sections: string[] = [];
-        const changes: string[] = [];
         for (const item of paths) {
             if (item.action !== 'M') {
                 throw new Error(`普通 Lua patch 暂不支持新增或删除文件: ${item.path}`);
@@ -309,14 +308,9 @@ export class PatchGenerator {
             ]);
             const generated = generateLuaModulePatch(moduleName, oldSource, newSource, diff);
             sections.push(generated.code);
-            changes.push(...generated.changes.map(change => `${moduleName}.${change}`));
         }
 
-        const body = [configPatch.trim(), sections.join('\n\n')].filter(Boolean).join('\n\n');
-        const qa = changes.length > 0
-            ? `-- QA测试用例：\n${changes.map((change, index) => `-- ${index + 1}. 验证 ${change} 修改是否生效；`).join('\n')}\n-- ${changes.length + 1}. 验证相关界面与流程无报错、无空引用；`
-            : '';
-        return [body, qa].filter(Boolean).join('\n\n');
+        return [configPatch.trim(), sections.join('\n\n')].filter(Boolean).join('\n\n');
     }
 
     private decodeXml(value: string): string {

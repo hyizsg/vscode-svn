@@ -9,7 +9,6 @@ interface LuaNode {
 
 export interface LuaModulePatch {
     code: string;
-    changes: string[];
 }
 
 interface ChangedLines {
@@ -137,7 +136,7 @@ export function generateLuaModulePatch(
     const moduleVariable = moduleRoot.match(/^[A-Za-z_][A-Za-z0-9_]*$/)
         ? moduleRoot
         : moduleName.split('.').pop()!.replace(/\W/g, '_');
-    const sections = [`-- ${moduleName}`, `local ${moduleVariable} = require(${quoteLua(moduleName)})`];
+    const sections = [`local ${moduleVariable} = require(${quoteLua(moduleName)})`];
     const dependencies = [...dependencyStatements]
         .filter(node => !declaredLocalNames(node).includes(moduleRoot))
         .sort(bySourceOrder)
@@ -151,11 +150,7 @@ export function generateLuaModulePatch(
     for (const target of removedTargets) { sections.push(`${target} = nil`); }
     sections.push(...mapOperations.map(item => item.code));
 
-    const changes = [
-        ...[...selectedPublic.keys()].map(displayTarget),
-        ...[...removedTargets].map(target => `${displayTarget(target)}（删除）`)
-    ];
-    return { code: sections.join('\n\n'), changes: [...new Set(changes)] };
+    return { code: sections.join('\n\n') };
 }
 
 function parseLua(source: string, moduleName: string, label: string): LuaNode {
@@ -435,9 +430,4 @@ function quoteLua(value: string): string {
 
 function bySourceOrder(a: LuaNode, b: LuaNode): number {
     return (a.range?.[0] || 0) - (b.range?.[0] || 0);
-}
-
-function displayTarget(target: string): string {
-    const parts = target.split('.');
-    return parts[parts.length - 1];
 }
