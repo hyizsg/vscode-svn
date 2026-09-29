@@ -4,8 +4,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as cp from 'child_process';
 import { SvnService } from './svnService';
-import { AiService } from './aiService';
 import { getOutputChannel } from './outputChannel';
+import { generateLuaModulePatch } from './luaPatchGenerator';
 
 export interface PatchLogEntry {
     revision: string;
@@ -24,10 +24,7 @@ interface PatchPathMappings {
 export class PatchGenerator {
     private readonly output = getOutputChannel();
 
-    constructor(
-        private readonly svnService: SvnService,
-        private readonly aiService: AiService
-    ) { }
+    constructor(private readonly svnService: SvnService) { }
 
     public async generateRevision(revision: number, targetPath: string): Promise<void> {
         const cwd = fs.statSync(targetPath).isDirectory() ? targetPath : path.dirname(targetPath);
@@ -84,7 +81,7 @@ export class PatchGenerator {
             let codePatch = '';
             if (codePaths.length > 0) {
                 progress.report({ message: '分析 Lua 代码改动' });
-                codePatch = await this.generateCodePatch(repoRoot, revision, entry, codePaths, configPatch, mappings);
+                codePatch = await this.generateCodePatch(repoRoot, revision, codePaths, configPatch, mappings);
             }
 
             if (!configPatch && !codePatch) {
@@ -239,10 +236,9 @@ export class PatchGenerator {
         dataDir: string,
         withMetadata: boolean
     ): Promise<string> {
-        const toolDir = path.join(projectDev, 'tools', '_配置表patch');
-        const generator = path.join(toolDir, generatorName);
+        const generator = path.join(__dirname, '..', 'resources', 'patch-tools', generatorName);
         if (!fs.existsSync(generator)) {
-            throw new Error(`未找到配置表 patch 工具: ${generator}`);
+            throw new Error(`插件内置配置表 patch 脚本缺失: ${generatorName}`);
         }
 
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vscode-svn-config-patch-'));
@@ -272,6 +268,7 @@ export class PatchGenerator {
                 const author = entry.author && entry.author !== localUser ? `${localUser} for ${entry.author}` : localUser;
                 args.push(dataDir, author, entry.message || `r${revision}`);
             }
+            args.push(...paths.map(item => path.posix.basename(item.path)));
             await this.execFile('lua', args, tempDir);
             const outputFile = path.join(tempDir, outputName);
             if (!fs.existsSync(outputFile)) {
@@ -286,61 +283,40 @@ export class PatchGenerator {
     private async generateCodePatch(
         repoRoot: string,
         revision: number,
-        entry: PatchLogEntry,
         paths: Array<{ action: string; path: string }>,
         configPatch: string,
         mappings: PatchPathMappings
     ): Promise<string> {
         const sections: string[] = [];
-        let remaining = 120000;
+        const changes: string[] = [];
         for (const item of paths) {
-            if (remaining <= 0) { break; }
-            const url = `${repoRoot}${item.path}`;
-            let diff = '';
-            let source = '';
-            try {
-                diff = await this.svnService.executeSvnCommand(
-                    `diff -c ${revision} "${url}@${revision}"`, path.dirname(__filename), false
-                );
-            } catch (error: any) {
-                diff = `无法获取差异: ${error.message}`;
-            }
-            if (item.action !== 'D') {
-                try {
-                    source = await this.svnService.executeSvnCommand(
-                        `cat -r ${revision} "${url}@${revision}"`, path.dirname(__filename), false
-                    );
-                } catch (error: any) {
-                    source = `无法获取完整源码: ${error.message}`;
-                }
+            if (item.action !== 'M') {
+                throw new Error(`普通 Lua patch 暂不支持新增或删除文件: ${item.path}`);
             }
             const moduleName = this.getModuleName(item.path, mappings);
-            const section = `文件: ${item.path} (${item.action})\nrequire 路径: ${moduleName}\nDIFF:\n${diff}\n\nr${revision} 完整源码:\n${source}`;
-            sections.push(section.slice(0, remaining));
-            remaining -= section.length;
+            if (!moduleName) { continue; }
+            const url = `${repoRoot}${item.path}`;
+            const [diff, oldSource, newSource] = await Promise.all([
+                this.svnService.executeSvnCommand(
+                    `diff -c ${revision} "${url}@${revision}"`, path.dirname(__filename), false
+                ),
+                this.svnService.executeSvnCommand(
+                    `cat -r ${revision - 1} "${url}@${revision - 1}"`, path.dirname(__filename), false
+                ),
+                this.svnService.executeSvnCommand(
+                    `cat -r ${revision} "${url}@${revision}"`, path.dirname(__filename), false
+                )
+            ]);
+            const generated = generateLuaModulePatch(moduleName, oldSource, newSource, diff);
+            sections.push(generated.code);
+            changes.push(...generated.changes.map(change => `${moduleName}.${change}`));
         }
 
-        const instruction = '你是资深 Lua 热更新工程师。只输出可直接执行的完整 patch.lua 源码，不要 Markdown 代码块、解释或省略号。';
-        const prompt = `请根据单个 SVN 日志生成 Lua 热更新 patch。\n\n` +
-            `版本: r${revision}\n作者: ${entry.author}\n提交信息: ${entry.message}\n\n` +
-            `强制规则：\n` +
-            `1. 只输出本次 revision 的 patch 正文，不输出 require("patch_always")，不生成版本、作者、变更说明、start/end 或分隔线；扩展会统一追加头尾注释。\n` +
-            `2. 每个模块代码前只写一行“-- require路径”，随后定义 local 模块变量和完整替换函数，例如“-- app.views.xxx”下一行“local Xxx = require("app.views.xxx")”。\n` +
-            `3. 正文末尾严格使用“-- QA测试用例：”标题，后续每条使用“-- 1. ...；”格式，不添加其他尾部说明。\n` +
-            `4. 只处理本次 revision，不包含已有 patch.lua 内容。\n` +
-            `5. 必须使用变更材料中给出的 require 路径。\n` +
-            `6. 必须重定义受影响的完整公开函数，保持冒号/点号和参数完全一致。\n` +
-            `7. 原文件顶层 local/upvalue 在 patch 中不可见，必须重新 require 或重新声明。\n` +
-            `8. local function 不能直接替换，需内联到公开调用者。\n` +
-            `9. EMAP/TMAP/AMAP 保存旧函数引用时，重定义后必须同步重绑。\n` +
-            (configPatch ? `10. 以下配置表 patch 必须原样包含在正文中：\n${configPatch}\n\n` : '') +
-            `变更材料：\n${sections.join('\n\n====================\n\n')}`;
-
-        const result = await this.aiService.generateText(prompt, instruction, `正在生成 r${revision} Lua patch...`);
-        if (!result.trim()) {
-            throw new Error('AI 未返回 Lua patch 内容');
-        }
-        return result;
+        const body = [configPatch.trim(), sections.join('\n\n')].filter(Boolean).join('\n\n');
+        const qa = changes.length > 0
+            ? `-- QA测试用例：\n${changes.map((change, index) => `-- ${index + 1}. 验证 ${change} 修改是否生效；`).join('\n')}\n-- ${changes.length + 1}. 验证相关界面与流程无报错、无空引用；`
+            : '';
+        return [body, qa].filter(Boolean).join('\n\n');
     }
 
     private decodeXml(value: string): string {

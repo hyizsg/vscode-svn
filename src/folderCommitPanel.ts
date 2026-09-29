@@ -98,7 +98,7 @@ export class SvnFolderCommitPanel {
     ) {
         this._panel = panel;
         this.aiService = new AiService();
-        this.patchGenerator = new PatchGenerator(this.svnService, this.aiService);
+        this.patchGenerator = new PatchGenerator(this.svnService);
         this.filterService = new SvnFilterService();
         this.templateManager = new TemplateManager(extensionUri);
         this.outputChannel = getOutputChannel();

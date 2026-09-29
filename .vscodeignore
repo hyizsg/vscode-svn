@@ -19,5 +19,7 @@ node_modules/**
 !node_modules/brace-expansion/**
 !node_modules/balanced-match
 !node_modules/balanced-match/**
+!node_modules/luaparse
+!node_modules/luaparse/**
 .git/**
 **/*.vsix 

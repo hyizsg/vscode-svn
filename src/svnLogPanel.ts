@@ -113,7 +113,7 @@ export class SvnLogPanel {
         this._outputChannel = getOutputChannel();
         this.templateManager = new TemplateManager(extensionUri);
         this.aiService = new AiService();
-        this.patchGenerator = new PatchGenerator(this.svnService, this.aiService);
+        this.patchGenerator = new PatchGenerator(this.svnService);
         this.aiCacheService = AiCacheService.getInstance();
         this._log('SVN日志面板已创建，目标路径: ' + targetPath);
         this._minLoadedRevision = null; // 确保初始化为null
