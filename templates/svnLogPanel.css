@@ -149,7 +149,7 @@ body {
 
 .log-entry .log-select-cell {
     grid-column: 1;
-    grid-row: 1 / span 2;
+    grid-row: 1;
     display: flex;
     align-items: flex-start;
     justify-content: center;
@@ -162,7 +162,7 @@ body {
 
 .log-entry .log-revision-cell {
     grid-column: 2;
-    grid-row: 1 / span 2;
+    grid-row: 1;
     font-weight: bold;
     align-self: start;
     color: var(--vscode-textLink-foreground, #4ec9b0);
@@ -180,7 +180,7 @@ body {
 }
 
 .log-entry .log-message-row {
-    grid-column: 3;
+    grid-column: 2 / -1;
     grid-row: 2;
     overflow: hidden;
     text-overflow: ellipsis;
