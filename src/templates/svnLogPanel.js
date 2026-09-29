@@ -62,6 +62,7 @@
     let selectedRevisions = new Set();
     let mergedRevisions = new Set();
     let logEntries = [];
+    let currentRevisionDetails = null;
     let currentHasMoreLogs = false;
     let lastClickedRevision = null;
     let dragSelection = null;
@@ -78,6 +79,22 @@
         // 获取最后一部分
         const parts = path.split('/');
         return parts[parts.length - 1] || '';
+    }
+
+    function normalizeSvnPath(value) {
+        return String(value || '')
+            .replace(/^\^/, '')
+            .replace(/\\\\/g, '/')
+            .replace(/\/+$/, '');
+    }
+
+    function getProjectRelativePath(filePath) {
+        const normalizedFilePath = normalizeSvnPath(filePath);
+        const projectRootPath = normalizeSvnPath(targetSvnRelativePath);
+        if (!projectRootPath || (normalizedFilePath !== projectRootPath && !normalizedFilePath.startsWith(projectRootPath + '/'))) {
+            return filePath;
+        }
+        return normalizedFilePath.slice(projectRootPath.length).replace(/^\/+/, '') || basename(normalizedFilePath);
     }
     
     // 调试日志函数
@@ -420,6 +437,9 @@
             case 'updateSvnRelativePath':
                 targetSvnRelativePath = message.targetSvnRelativePath;
                 debugLog('更新SVN相对路径: ' + targetSvnRelativePath);
+                if (currentRevisionDetails) {
+                    renderRevisionDetails(currentRevisionDetails);
+                }
                 break;
             case 'updateIsDirectory':
                 isDirectory = message.isDirectory;
@@ -784,6 +804,7 @@
     
     // 渲染修订版本详情
     function renderRevisionDetails(details) {
+        currentRevisionDetails = details;
         debugLog('开始渲染修订版本详情');
         if (!details) {
             debugLog('没有详情数据');
@@ -974,6 +995,11 @@
                     
                     // 在文件模式下，不使用相对路径匹配逻辑，保持相对路径原样
                     debugLog('文件模式，不高亮相对路径');
+                }
+
+                const projectRelativePath = getProjectRelativePath(filePath);
+                if (projectRelativePath !== filePath) {
+                    relativePathHtml = escapeHtml(projectRelativePath);
                 }
                 
                 const canViewDiff = isAggregate

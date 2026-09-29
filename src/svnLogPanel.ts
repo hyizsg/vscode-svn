@@ -2958,7 +2958,7 @@ export class SvnLogPanel {
             
             if (relativeUrlMatch && relativeUrlMatch[1]) {
                 // 如果有relative-url标签，直接使用
-                this._targetSvnRelativePath = relativeUrlMatch[1];
+                this._targetSvnRelativePath = relativeUrlMatch[1].replace(/^\^/, '').replace(/\/+$/, '');
                 this._log(`找到SVN相对路径(relative-url): ${this._targetSvnRelativePath}`);
             } else if (urlMatch && urlMatch[1]) {
                 // 如果没有relative-url标签，从url中提取
