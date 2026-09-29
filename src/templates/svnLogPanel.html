@@ -56,16 +56,23 @@
     </div>
     
     <div class="container">
-        <div class="log-list" id="logList">
-            <!-- 日志列表头部信息 -->
-            <div class="log-list-header" id="logListHeader" style="display: none; padding: 10px; border-bottom: 1px solid var(--vscode-panel-border); background-color: var(--vscode-editor-background); position: sticky; top: 0; z-index: 10;">
-                <div class="log-count-summary" id="logCountSummary" style="font-weight: bold; color: var(--vscode-foreground);"></div>
-                <div class="log-filter-status" id="logFilterStatus" style="font-size: 0.9em; color: var(--vscode-descriptionForeground); margin-top: 3px;"></div>
+        <div class="log-list-pane">
+            <div class="log-list-columns">
+                <span class="log-select-column"><input type="checkbox" id="selectAllLogs" title="全选/取消全选当前显示日志"></span>
+                <span>版本</span>
+                <div class="col-meta"><span>作者</span><span>日期</span></div>
             </div>
-            
-            <div class="empty-state">
-                <div class="empty-icon">📋</div>
-                <div>加载中，请稍候...</div>
+            <div class="log-list" id="logList">
+                <!-- 日志列表头部信息 -->
+                <div class="log-list-header" id="logListHeader" style="display: none; padding: 10px; border-bottom: 1px solid var(--vscode-panel-border); background-color: var(--vscode-editor-background);">
+                    <div class="log-count-summary" id="logCountSummary" style="font-weight: bold; color: var(--vscode-foreground);"></div>
+                    <div class="log-filter-status" id="logFilterStatus" style="font-size: 0.9em; color: var(--vscode-descriptionForeground); margin-top: 3px;"></div>
+                </div>
+
+                <div class="empty-state">
+                    <div class="empty-icon">📋</div>
+                    <div>加载中，请稍候...</div>
+                </div>
             </div>
         </div>
         <div class="log-details" id="logDetails">

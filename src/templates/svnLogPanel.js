@@ -61,7 +61,6 @@
     let selectedRevision = null;
     let selectedRevisions = new Set();
     let mergedRevisions = new Set();
-    let eligibleRevisions = new Set();
     let logEntries = [];
     let currentHasMoreLogs = false;
     let lastClickedRevision = null;
@@ -195,6 +194,8 @@
 
         if (revisions.length === 1) {
             selectedRevision = revisions[0];
+            const entry = logEntries.find(item => String(item.revision) === revisions[0]);
+            if (entry) renderRevisionDetails(entry);
             vscode.postMessage({ command: 'selectRevision', revision: revisions[0], revisions });
         } else {
             vscode.postMessage({ command: 'selectRevisions', revisions });
@@ -431,7 +432,7 @@
                 break;
             case 'showRevisionDetails':
                 debugLog('显示修订版本详情: ' + message.revision);
-                if (selectedRevisions.size !== 1 || !selectedRevisions.has(String(message.revision))) {
+                if (selectedRevisions.size > 1 || selectedRevision !== String(message.revision)) {
                     break;
                 }
                 if (message.details && message.details.paths) {
@@ -466,7 +467,6 @@
                 break;
             case 'mergeRevisionStatus':
                 mergedRevisions = new Set((message.mergedRevisions || []).map(Number));
-                eligibleRevisions = new Set((message.eligibleRevisions || []).map(Number));
                 renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
                 break;
             case 'mergeStarted': {
@@ -539,11 +539,15 @@
         debugLog('渲染日志列表' + (isLoadingMore ? '(加载更多)' : ''));
         const savedScrollTop = logList.scrollTop;
         const hasLoadedEntries = logEntries.length > 0;
+        const selectAll = document.getElementById('selectAllLogs');
         loadMoreControl.style.display = hasLoadedEntries && hasMoreLogs !== false ? 'inline-flex' : 'none';
         logCountInfo.textContent = '(显示: ' + entries.length + ' 条)';
         filterResult.textContent = entries.length === logEntries.length ? '' : '显示 ' + entries.length + ' / ' + logEntries.length + ' 条';
 
         if (!entries || entries.length === 0) {
+            selectAll.checked = false;
+            selectAll.indeterminate = false;
+            selectAll.disabled = true;
             logList.innerHTML = `
                 <div class="empty-state">
                     <div class="empty-icon">📋</div>
@@ -552,9 +556,10 @@
             `;
             return;
         }
+        selectAll.disabled = false;
 
         const allVisibleSelected = entries.every(entry => selectedRevisions.has(String(entry.revision)));
-        let html = '<div class="log-list-columns"><span class="log-select-column"><input type="checkbox" id="selectAllLogs" title="全选/取消全选当前显示日志" ' + (allVisibleSelected ? 'checked' : '') + '></span><span>Revision</span><div class="col-meta"><span>Author</span><span>Date</span></div></div>';
+        let html = '';
 
         entries.forEach(entry => {
             const revision = String(entry.revision);
@@ -574,9 +579,9 @@
         });
 
         logList.innerHTML = html;
-        const selectAll = document.getElementById('selectAllLogs');
+        selectAll.checked = allVisibleSelected;
         selectAll.indeterminate = !allVisibleSelected && entries.some(entry => selectedRevisions.has(String(entry.revision)));
-        selectAll.addEventListener('change', () => {
+        selectAll.onchange = () => {
             entries.forEach(entry => {
                 const revision = String(entry.revision);
                 if (selectAll.checked) selectedRevisions.add(revision);
@@ -584,7 +589,7 @@
             });
             syncSelectedRevisions();
             renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
-        });
+        };
 
         document.querySelectorAll('.log-entry').forEach(entryElement => {
             const checkbox = entryElement.querySelector('.log-select-checkbox');
@@ -604,22 +609,15 @@
                 renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
             });
 
-            entryElement.addEventListener('click', event => {
+            entryElement.addEventListener('click', () => {
                 if (suppressNextRowClick) {
                     suppressNextRowClick = false;
                     return;
                 }
-                const additive = event.ctrlKey || event.metaKey;
-                if (event.shiftKey && lastClickedRevision && lastClickedRevision !== revision) {
-                    applyShiftRange(lastClickedRevision, revision, true);
-                } else if (additive && selectedRevisions.has(revision)) {
-                    selectedRevisions.delete(revision);
-                } else {
-                    selectedRevisions.add(revision);
-                }
                 selectedRevision = revision;
+                selectedRevisions = new Set([revision]);
                 lastClickedRevision = revision;
-                debugLog('选择修订版本: ' + revision);
+                debugLog('单选修订版本: ' + revision);
                 syncSelectedRevisions(revision);
                 renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
             });
@@ -629,7 +627,7 @@
                 event.stopPropagation();
                 const message = entryElement.getAttribute('data-message') || '';
                 selectedRevision = revision;
-                selectedRevisions.add(revision);
+                selectedRevisions = new Set([revision]);
                 lastClickedRevision = revision;
                 syncSelectedRevisions(revision);
                 renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);

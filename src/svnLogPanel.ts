@@ -10,6 +10,13 @@ import { getOutputChannel } from './outputChannel';
 import { PatchGenerator } from './patchGenerator';
 
 const STATE_KEY_MERGE_TARGET = 'mergeToBranch.lastTargetPath';
+const STATE_KEY_MERGE_STATUS = 'mergeToBranch.lastMergedStatus';
+
+interface MergeStatusCache {
+    sourcePath: string;
+    targetPath: string;
+    mergedRevisions: number[];
+}
 
 /**
  * SVN日志条目接口
@@ -73,7 +80,7 @@ export class SvnLogPanel {
     private _lastMergeRevisions: number[] = [];
     private _lastMergeEntries: SvnLogEntry[] = [];
     private _mergedRevisions = new Set<number>();
-    private _eligibleRevisions = new Set<number>();
+    private _mergeStatusRefresh?: Promise<void>;
 
     // AI分析时需要排除的文件扩展名
     private static readonly EXCLUDED_EXTENSIONS = [
@@ -122,6 +129,10 @@ export class SvnLogPanel {
     ) {
         this._panel = panel;
         this._targetPath = targetPath;
+        const savedMergeTarget = context.globalState.get<string>(STATE_KEY_MERGE_TARGET, '');
+        if (savedMergeTarget && fs.existsSync(savedMergeTarget)) {
+            this._mergeTargetPath = savedMergeTarget;
+        }
         this._outputChannel = getOutputChannel();
         this.templateManager = new TemplateManager(extensionUri);
         this.aiService = new AiService();
@@ -142,6 +153,7 @@ export class SvnLogPanel {
 
         // 获取文件夹的SVN相对路径
         this._getSvnRelativePath();
+        this._refreshMergeStatusInBackground();
 
         // 初始加载日志
         this._loadLogs();
@@ -566,7 +578,6 @@ export class SvnLogPanel {
         if (this._logEntries.length > 0 && !this._selectedRevision && !isLoadingMore) {
             initialRevision = this._logEntries[0].revision;
             this._selectedRevision = initialRevision;
-            this._selectedRevisions.add(initialRevision);
         }
 
         const isDirectory = fs.lstatSync(this._targetPath).isDirectory();
@@ -594,7 +605,7 @@ export class SvnLogPanel {
             void this._showRevisionDetails(initialRevision);
         }
         if (!isLoadingMore) {
-            void this._postMergeTargetInfo().then(() => this._refreshMergeRevisionStatus());
+            this._refreshMergeStatusInBackground();
         }
     }
 
@@ -820,9 +831,7 @@ export class SvnLogPanel {
         return match ? match[1] : url;
     }
 
-    private async _resolveMergeSourceUrl(targetPath: string): Promise<string> {
-        const sourceUrl = await this.svnService.getWorkingCopyUrl(this._targetPath);
-        const targetUrl = await this.svnService.getWorkingCopyUrl(targetPath);
+    private _mapMergeSourceUrl(sourceUrl: string, targetUrl: string): string {
         const sourceRoot = this._branchRootUrl(sourceUrl);
         const targetRoot = this._branchRootUrl(targetUrl);
         return sourceRoot && targetRoot
@@ -830,65 +839,96 @@ export class SvnLogPanel {
             : sourceUrl;
     }
 
-    private async _refreshMergeRevisionStatus(): Promise<void> {
+    private async _resolveMergeSourceUrl(targetPath: string): Promise<string> {
+        const [sourceUrl, targetUrl] = await Promise.all([
+            this.svnService.getWorkingCopyUrl(this._targetPath),
+            this.svnService.getWorkingCopyUrl(targetPath)
+        ]);
+        return this._mapMergeSourceUrl(sourceUrl, targetUrl);
+    }
+
+    private _refreshMergeStatusInBackground(): void {
+        this._postCachedMergeRevisionStatus();
+        if (this._mergeStatusRefresh) { return; }
+        const refresh = this._postMergeTargetInfo()
+            .then(mergeSourceUrl => this._refreshMergeRevisionStatus(mergeSourceUrl))
+            .finally(() => {
+                if (this._mergeStatusRefresh === refresh) {
+                    this._mergeStatusRefresh = undefined;
+                }
+            });
+        this._mergeStatusRefresh = refresh;
+    }
+
+    private _postCachedMergeRevisionStatus(): void {
+        if (!this._mergeTargetPath) { return; }
+        const cached = this.context.globalState.get<MergeStatusCache>(STATE_KEY_MERGE_STATUS);
+        if (cached?.sourcePath !== this._targetPath || cached.targetPath !== this._mergeTargetPath) { return; }
+        this._mergedRevisions = new Set(cached.mergedRevisions);
+        void this._panel.webview.postMessage({
+            command: 'mergeRevisionStatus',
+            mergedRevisions: cached.mergedRevisions
+        });
+    }
+
+    private async _refreshMergeRevisionStatus(knownMergeSourceUrl?: string): Promise<void> {
         if (!this._mergeTargetPath) {
             this._mergedRevisions.clear();
-            this._eligibleRevisions.clear();
             void this._panel.webview.postMessage({
                 command: 'mergeRevisionStatus',
-                mergedRevisions: [],
-                eligibleRevisions: []
+                mergedRevisions: []
             });
             return;
         }
 
         try {
-            const mergeSourceUrl = await this._resolveMergeSourceUrl(this._mergeTargetPath);
-            const [merged, eligible] = await Promise.all([
-                this.svnService.getMergedRevisions(this._mergeTargetPath, mergeSourceUrl),
-                this.svnService.getEligibleRevisions(this._mergeTargetPath, mergeSourceUrl)
-            ]);
+            const mergeSourceUrl = knownMergeSourceUrl || await this._resolveMergeSourceUrl(this._mergeTargetPath);
+            const merged = await this.svnService.getMergedRevisions(this._mergeTargetPath, mergeSourceUrl);
             this._mergedRevisions = merged;
-            this._eligibleRevisions = eligible;
+            const mergedRevisions = Array.from(merged);
             void this._panel.webview.postMessage({
                 command: 'mergeRevisionStatus',
-                mergedRevisions: Array.from(merged),
-                eligibleRevisions: Array.from(eligible)
+                mergedRevisions
             });
+            await this.context.globalState.update(STATE_KEY_MERGE_STATUS, {
+                sourcePath: this._targetPath,
+                targetPath: this._mergeTargetPath,
+                mergedRevisions
+            } satisfies MergeStatusCache);
         } catch (error: any) {
             this._log(`检测分支合并状态失败: ${error.message}`);
-            this._mergedRevisions.clear();
-            this._eligibleRevisions.clear();
             void this._panel.webview.postMessage({
                 command: 'mergeRevisionStatus',
-                mergedRevisions: [],
-                eligibleRevisions: []
+                mergedRevisions: Array.from(this._mergedRevisions)
             });
         }
     }
 
-    private async _postMergeTargetInfo(): Promise<void> {
+    private async _postMergeTargetInfo(): Promise<string | undefined> {
         if (!this._mergeTargetPath) {
-            const saved = this.context.globalState.get<string>(STATE_KEY_MERGE_TARGET, '');
-            if (saved && fs.existsSync(saved)) {
-                this._mergeTargetPath = saved;
-            }
+            void this._panel.webview.postMessage({ command: 'mergeTargetInfo', info: null });
+            return undefined;
         }
 
-        let info: { targetPath: string; dirName: string; branchName: string } | null = null;
-        if (this._mergeTargetPath) {
-            try {
-                const url = await this.svnService.getWorkingCopyUrl(this._mergeTargetPath);
-                info = {
+        try {
+            const [sourceUrl, targetUrl] = await Promise.all([
+                this.svnService.getWorkingCopyUrl(this._targetPath),
+                this.svnService.getWorkingCopyUrl(this._mergeTargetPath)
+            ]);
+            void this._panel.webview.postMessage({
+                command: 'mergeTargetInfo',
+                info: {
                     targetPath: this._mergeTargetPath,
                     dirName: path.basename(this._mergeTargetPath),
-                    branchName: this._shortBranchName(url)
-                };
-            } catch {
-                this._mergeTargetPath = undefined;
-            }
+                    branchName: this._shortBranchName(targetUrl)
+                }
+            });
+            return this._mapMergeSourceUrl(sourceUrl, targetUrl);
+        } catch {
+            this._mergeTargetPath = undefined;
+            void this._panel.webview.postMessage({ command: 'mergeTargetInfo', info: null });
+            return undefined;
         }
-        void this._panel.webview.postMessage({ command: 'mergeTargetInfo', info });
     }
 
     private async _chooseMergeTarget(): Promise<boolean> {
@@ -922,8 +962,8 @@ export class SvnLogPanel {
 
         this._mergeTargetPath = targetPath;
         await this.context.globalState.update(STATE_KEY_MERGE_TARGET, targetPath);
-        await this._postMergeTargetInfo();
-        await this._refreshMergeRevisionStatus();
+        const mergeSourceUrl = await this._postMergeTargetInfo();
+        await this._refreshMergeRevisionStatus(mergeSourceUrl);
         return true;
     }
 
@@ -1081,7 +1121,7 @@ export class SvnLogPanel {
             appendOutput(`\n✅ ${revisionText} 已合并并提交到 ${path.basename(target)}\n`);
             webview.postMessage({ command: 'mergeFinished', success: true, hasConflicts: false });
             vscode.window.showInformationMessage(`${revisionText} 已合并并提交到 ${path.basename(target)}`);
-            await this._refreshMergeRevisionStatus();
+            await this._refreshMergeRevisionStatus(this._lastMergeSourceUrl);
         } catch (error: any) {
             if (this._mergeCancelled) {
                 appendOutput('\n已取消提交合并（合并结果仍保留在目标工作副本中，可点击「再次提交」重试）\n');
@@ -1114,8 +1154,6 @@ export class SvnLogPanel {
                         this._log(`选择修订版本: ${message.revision}`);
                         if (Array.isArray(message.revisions)) {
                             this._selectedRevisions = new Set(message.revisions.map(String));
-                        } else {
-                            this._selectedRevisions.add(String(message.revision));
                         }
                         await this._showRevisionDetails(message.revision);
                         break;
