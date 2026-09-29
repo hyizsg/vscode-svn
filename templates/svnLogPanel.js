@@ -20,8 +20,7 @@
     
     // 筛选表单元素
     const revisionFilter = document.getElementById('revisionFilter');
-    const authorFilter = document.getElementById('authorFilter');
-    const contentFilter = document.getElementById('contentFilter');
+    const logFilterInput = document.getElementById('logFilterInput');
     const filterButton = document.getElementById('filterButton');
     const clearFilterButton = document.getElementById('clearFilterButton');
     const filterResult = document.getElementById('filterResult');
@@ -60,7 +59,11 @@
     let showRelatedFilesOnly = true;
     
     let selectedRevision = null;
+    let selectedRevisions = new Set();
+    let mergedRevisions = new Set();
+    let eligibleRevisions = new Set();
     let logEntries = [];
+    let currentHasMoreLogs = false;
     
     // 辅助函数：获取路径的最后一部分（文件名或目录名）
     function basename(path) {
@@ -82,6 +85,45 @@
             command: 'debug',
             message: message
         });
+    }
+
+    function escapeHtml(value) {
+        return String(value || '').replace(/[&<>"']/g, character => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[character]));
+    }
+
+    function matchesLogFilter(entry, filterText) {
+        const searchable = ('r' + entry.revision + ' ' + entry.author + ' ' + entry.message + ' ' + entry.date).toLowerCase();
+        const tokens = filterText.split(/\s+/).filter(Boolean);
+        const groups = [];
+        let current = [];
+        for (let index = 0; index < tokens.length; index++) {
+            const token = tokens[index];
+            if (token === '+') continue;
+            if (index > 0 && tokens[index - 1] === '+') {
+                current.push(token);
+            } else {
+                if (current.length > 0) groups.push(current);
+                current = [token];
+            }
+        }
+        if (current.length > 0) groups.push(current);
+        return groups.length === 0 || groups.every(group => group.some(keyword => searchable.includes(keyword)));
+    }
+
+    function getVisibleLogEntries() {
+        const filterText = (logFilterInput.value || '').trim().toLowerCase();
+        return logEntries.filter(entry => !filterText || matchesLogFilter(entry, filterText));
+    }
+
+    function selectedRevisionArray() {
+        return Array.from(selectedRevisions).sort((left, right) => Number(left) - Number(right));
+    }
+
+    function syncSelectedRevisions() {
+        vscode.postMessage({ command: 'selectRevisions', revisions: selectedRevisionArray() });
+        showSelectedRevisionButtons();
     }
     
     // ========== 右键菜单工具函数 ==========
@@ -204,10 +246,13 @@
         if (!button) return;
         const line1 = button.querySelector('.btn-line1');
         const line2 = button.querySelector('.btn-line2');
+        const selectionText = selectedRevisions.size === 1
+            ? 'r' + selectedRevisionArray()[0]
+            : '已选 ' + selectedRevisions.size + ' 个版本';
         if (mergeTargetInfo) {
             line1.textContent = '合并到(' + mergeTargetInfo.dirName + ')';
             line2.textContent = mergeTargetInfo.branchName || '';
-            button.title = '将 r' + (selectedRevision || '') + ' 合并到 ' + mergeTargetInfo.targetPath + ' 并自动提交';
+            button.title = '将 ' + selectionText + ' 合并到 ' + mergeTargetInfo.targetPath + ' 并自动提交';
         } else {
             line1.textContent = '合并到分支...';
             line2.textContent = '';
@@ -216,11 +261,14 @@
     }
 
     function showSelectedRevisionButtons() {
-        const buttons = selectedRevision
+        const buttons = selectedRevisions.size > 0
             ? ['generatePatchButton', 'changeMergeTargetButton', 'mergeToBranchButton', 'closeLogPanelButton']
             : ['closeLogPanelButton'];
         setFooterButtons(buttons);
         renderMergeTargetButton();
+        generatePatchButton.title = selectedRevisions.size > 1
+            ? '根据已选 ' + selectedRevisions.size + ' 个版本生成最终 Lua patch'
+            : '根据选中的日志版本生成 Lua patch';
     }
 
     function showMergeOutput(clearOutput) {
@@ -264,38 +312,24 @@
                 loading.style.display = message.value ? 'flex' : 'none';
                 break;
             case 'updateLogList':
-                logEntries = message.logEntries;
+                logEntries = message.logEntries || [];
+                currentHasMoreLogs = message.hasMoreLogs !== false;
                 debugLog('收到日志条目: ' + logEntries.length + '条');
-                
-                // 更新isDirectory状态
+
                 if (message.hasOwnProperty('isDirectory')) {
                     isDirectory = message.isDirectory;
                     debugLog('更新isDirectory: ' + isDirectory);
                 }
-                
-                // 更新SVN相对路径
+
                 if (message.targetSvnRelativePath) {
                     targetSvnRelativePath = message.targetSvnRelativePath;
                     debugLog('更新SVN相对路径: ' + targetSvnRelativePath);
                 }
-                
-                // 如果有选中的修订版本，使用它
-                if (message.selectedRevision) {
-                    selectedRevision = message.selectedRevision;
-                    debugLog('使用服务器提供的选中修订版本: ' + selectedRevision);
-                } else if (logEntries.length > 0) {
-                    // 否则，如果有日志条目，默认选择第一个
-                    selectedRevision = logEntries[0].revision;
-                    debugLog('默认选择第一个修订版本: ' + selectedRevision);
-                    
-                    // 自动触发选择第一个日志条目
-                    vscode.postMessage({
-                        command: 'selectRevision',
-                        revision: selectedRevision
-                    });
-                }
-                
-                renderLogList(logEntries, message.isLoadingMore, message.hasMoreLogs);
+
+                selectedRevision = message.selectedRevision || null;
+                selectedRevisions = new Set((message.selectedRevisions || []).map(String));
+                renderLogList(getVisibleLogEntries(), message.isLoadingMore, currentHasMoreLogs);
+                showSelectedRevisionButtons();
                 break;
             case 'updateSvnRelativePath':
                 targetSvnRelativePath = message.targetSvnRelativePath;
@@ -344,6 +378,11 @@
             case 'mergeTargetInfo':
                 mergeTargetInfo = message.info || null;
                 renderMergeTargetButton();
+                break;
+            case 'mergeRevisionStatus':
+                mergedRevisions = new Set((message.mergedRevisions || []).map(Number));
+                eligibleRevisions = new Set((message.eligibleRevisions || []).map(Number));
+                renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
                 break;
             case 'mergeStarted': {
                 mergeRunning = true;
@@ -394,7 +433,9 @@
                 break;
             case 'updateLogCount':
                 debugLog('更新日志数量信息: ' + message.count + ' 条记录');
-                updateLogCountDisplay(message.count, message.isFiltered, message.hasMoreLogs, message.filterDescription);
+                if (!(logFilterInput.value || '').trim()) {
+                    updateLogCountDisplay(message.count, message.isFiltered, message.hasMoreLogs, message.filterDescription);
+                }
                 break;
             case 'aiAnalysisComplete':
                 debugLog('AI分析完成');
@@ -411,87 +452,113 @@
     // 渲染日志列表（表格行式 + 右键菜单）
     function renderLogList(entries, isLoadingMore, hasMoreLogs) {
         debugLog('渲染日志列表' + (isLoadingMore ? '(加载更多)' : ''));
-            
-        // 加载更多时保存当前滚动位置
-        var savedScrollTop = isLoadingMore ? logList.scrollTop : 0;
-        loadMoreControl.style.display = entries && entries.length > 0 && hasMoreLogs !== false ? 'inline-flex' : 'none';
+        const savedScrollTop = logList.scrollTop;
+        const hasLoadedEntries = logEntries.length > 0;
+        loadMoreControl.style.display = hasLoadedEntries && hasMoreLogs !== false ? 'inline-flex' : 'none';
+        logCountInfo.textContent = '(显示: ' + entries.length + ' 条)';
+        filterResult.textContent = entries.length === logEntries.length ? '' : '显示 ' + entries.length + ' / ' + logEntries.length + ' 条';
+
         if (!entries || entries.length === 0) {
             logList.innerHTML = `
                 <div class="empty-state">
                     <div class="empty-icon">📋</div>
-                    <div>没有找到日志记录</div>
+                    <div>${hasLoadedEntries ? '无匹配的日志记录' : '没有找到日志记录'}</div>
                 </div>
             `;
             return;
         }
-        
-        // 列头
-        let html = '<div class="log-list-columns"><span>Revision</span><div class="col-meta"><span>Author</span><span>Date</span></div></div>';
-        
+
+        const allVisibleSelected = entries.every(entry => selectedRevisions.has(String(entry.revision)));
+        let html = '<div class="log-list-columns"><span class="log-select-column"><input type="checkbox" id="selectAllLogs" title="全选/取消全选当前显示日志" ' + (allVisibleSelected ? 'checked' : '') + '></span><span>Revision</span><div class="col-meta"><span>Author</span><span>Date</span></div></div>';
+
         entries.forEach(entry => {
-            const isSelected = entry.revision === selectedRevision;
+            const revision = String(entry.revision);
+            const isActive = revision === selectedRevision;
+            const isChecked = selectedRevisions.has(revision);
             const isNewerThanLocal = entry.isNewerThanLocal;
-            const msgPreview = (entry.message || '').replace(/\n/g, ' ').substring(0, 80);
-            const newerBadge = isNewerThanLocal ? '<span style="background:#ff9800;color:#fff;font-size:0.75em;padding:1px 4px;border-radius:3px;margin-left:4px;">未更新</span>' : '';
-            
-            html += '<div class="log-entry ' + (isSelected ? 'selected' : '') + ' ' + (isNewerThanLocal ? 'newer-than-local' : '') + '" data-revision="' + entry.revision + '" data-message="' + entry.message.replace(/"/g, '&quot;').replace(/</g, '&lt;') + '">' +
-                '<div class="log-revision-cell">r' + entry.revision + newerBadge + '</div>' +
-                '<div class="log-meta-row"><span>' + entry.author + '</span><span>' + entry.date + '</span></div>' +
-                '<div class="log-message-row" title="' + entry.message.replace(/"/g, '&quot;').replace(/</g, '&lt;') + '">' + msgPreview + '</div>' +
+            const revisionNumber = Number(revision);
+            const isMerged = mergedRevisions.has(revisionNumber);
+            const isEligible = eligibleRevisions.has(revisionNumber);
+            const msgPreview = escapeHtml((entry.message || '').replace(/\n/g, ' ').substring(0, 80));
+            const newerBadge = isNewerThanLocal ? '<span class="revision-badge newer">未更新</span>' : '';
+            const mergeBadge = isMerged
+                ? '<span class="revision-badge merged">已合并</span>'
+                : (isEligible ? '<span class="revision-badge eligible">未合并</span>' : '');
+
+            html += '<div class="log-entry ' + (isActive ? 'active ' : '') + (isChecked ? 'selected ' : '') + (isNewerThanLocal ? 'newer-than-local' : '') + '" data-revision="' + escapeHtml(revision) + '" data-message="' + escapeHtml(entry.message) + '">' +
+                '<div class="log-select-cell"><input type="checkbox" class="log-select-checkbox" ' + (isChecked ? 'checked' : '') + ' title="选择 r' + escapeHtml(revision) + '"></div>' +
+                '<div class="log-revision-cell">r' + escapeHtml(revision) + newerBadge + mergeBadge + '</div>' +
+                '<div class="log-meta-row"><span>' + escapeHtml(entry.author) + '</span><span>' + escapeHtml(entry.date) + '</span></div>' +
+                '<div class="log-message-row" title="' + escapeHtml(entry.message) + '">' + msgPreview + '</div>' +
             '</div>';
         });
-        
+
         logList.innerHTML = html;
-        debugLog('日志列表渲染完成');
-        
-        // 单击选中事件
-        document.querySelectorAll('.log-entry').forEach(entry => {
-            entry.addEventListener('click', () => {
-                const revision = entry.getAttribute('data-revision');
-                selectedRevision = revision;
-                debugLog('选择修订版本: ' + revision);
-                document.querySelectorAll('.log-entry').forEach(e => e.classList.remove('selected'));
-                entry.classList.add('selected');
-                vscode.postMessage({ command: 'selectRevision', revision: revision });
+        const selectAll = document.getElementById('selectAllLogs');
+        selectAll.indeterminate = !allVisibleSelected && entries.some(entry => selectedRevisions.has(String(entry.revision)));
+        selectAll.addEventListener('change', () => {
+            entries.forEach(entry => {
+                const revision = String(entry.revision);
+                if (selectAll.checked) selectedRevisions.add(revision);
+                else selectedRevisions.delete(revision);
             });
-            
-            // 右键菜单
-            entry.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const revision = entry.getAttribute('data-revision');
-                const message = entry.getAttribute('data-message') || '';
-                
-                // 先选中该行
+            syncSelectedRevisions();
+            renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
+        });
+
+        document.querySelectorAll('.log-entry').forEach(entryElement => {
+            const checkbox = entryElement.querySelector('.log-select-checkbox');
+            checkbox.addEventListener('click', event => {
+                event.stopPropagation();
+                const revision = entryElement.getAttribute('data-revision');
+                if (checkbox.checked) selectedRevisions.add(revision);
+                else selectedRevisions.delete(revision);
+                syncSelectedRevisions();
+                renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
+            });
+
+            entryElement.addEventListener('click', () => {
+                const revision = entryElement.getAttribute('data-revision');
                 selectedRevision = revision;
-                document.querySelectorAll('.log-entry').forEach(el => el.classList.remove('selected'));
-                entry.classList.add('selected');
-                vscode.postMessage({ command: 'selectRevision', revision: revision });
-                
-                createContextMenu(e.clientX, e.clientY, [
-                    { icon: '📄', label: '与前一版本比较 (Show Changes)', action: () => vscode.postMessage({ command: 'viewRevisionDiff', revision: revision }) },
-                    { icon: '🔄', label: '与工作副本比较', action: () => vscode.postMessage({ command: 'compareWithWorkingCopy', revision: revision }) },
-                    { icon: '⬇️', label: '更新到此版本', action: () => vscode.postMessage({ command: 'updateToRevision', revision: revision }) },
-                    { icon: '↩️', label: '回滚此版本更改', action: () => vscode.postMessage({ command: 'revertToRevision', revision: revision }) },
+                selectedRevisions.add(revision);
+                debugLog('选择修订版本: ' + revision);
+                vscode.postMessage({ command: 'selectRevision', revision, revisions: selectedRevisionArray() });
+                renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
+                showSelectedRevisionButtons();
+            });
+
+            entryElement.addEventListener('contextmenu', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                const revision = entryElement.getAttribute('data-revision');
+                const message = entryElement.getAttribute('data-message') || '';
+                selectedRevision = revision;
+                selectedRevisions.add(revision);
+                vscode.postMessage({ command: 'selectRevision', revision, revisions: selectedRevisionArray() });
+                renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
+                showSelectedRevisionButtons();
+
+                createContextMenu(event.clientX, event.clientY, [
+                    { icon: '📄', label: '与前一版本比较 (Show Changes)', action: () => vscode.postMessage({ command: 'viewRevisionDiff', revision }) },
+                    { icon: '🔄', label: '与工作副本比较', action: () => vscode.postMessage({ command: 'compareWithWorkingCopy', revision }) },
+                    { icon: '⬇️', label: '更新到此版本', action: () => vscode.postMessage({ command: 'updateToRevision', revision }) },
+                    { icon: '↩️', label: '回滚此版本更改', action: () => vscode.postMessage({ command: 'revertToRevision', revision }) },
                     { separator: true },
-                    { icon: '🌿', label: '从此版本创建分支/标签', action: () => vscode.postMessage({ command: 'createBranchFromRevision', revision: revision }) },
-                    { icon: '💾', label: '导出此版本 Diff', action: () => vscode.postMessage({ command: 'exportRevisionDiff', revision: revision }) },
+                    { icon: '🌿', label: '从此版本创建分支/标签', action: () => vscode.postMessage({ command: 'createBranchFromRevision', revision }) },
+                    { icon: '💾', label: '导出此版本 Diff', action: () => vscode.postMessage({ command: 'exportRevisionDiff', revision }) },
                     { separator: true },
-                    { icon: '📝', label: '复制修订版本号', action: () => vscode.postMessage({ command: 'copyRevisionNumber', revision: revision }) },
-                    { icon: '📋', label: '复制提交信息', action: () => vscode.postMessage({ command: 'copyLogMessage', revision: revision, message: message }) },
-                    { icon: '📂', label: '浏览此版本仓库', action: () => vscode.postMessage({ command: 'browseRevisionRepo', revision: revision }) },
+                    { icon: '📝', label: '复制修订版本号', action: () => vscode.postMessage({ command: 'copyRevisionNumber', revision }) },
+                    { icon: '📋', label: '复制提交信息', action: () => vscode.postMessage({ command: 'copyLogMessage', revision, message }) },
+                    { icon: '📂', label: '浏览此版本仓库', action: () => vscode.postMessage({ command: 'browseRevisionRepo', revision }) },
                 ]);
             });
         });
-        
-        // 加载更多时恢复滚动位置，否则滚动到选中项
-        if (isLoadingMore && savedScrollTop > 0) {
+
+        if (isLoadingMore || savedScrollTop > 0) {
             logList.scrollTop = savedScrollTop;
         } else if (selectedRevision) {
-            const selectedEntry = document.querySelector('.log-entry[data-revision="' + selectedRevision + '"]');
-            if (selectedEntry) {
-                selectedEntry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }
+            const activeEntry = document.querySelector('.log-entry[data-revision="' + selectedRevision + '"]');
+            if (activeEntry) activeEntry.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
         }
     }
     
@@ -871,76 +938,45 @@
     filterButton.addEventListener('click', () => {
         const useDate = dateFilterToggle.checked;
         const revision = revisionFilter.value.trim();
-        const author = authorFilter.value.trim();
-        const content = contentFilter.value.trim();
         const startDate = startDateFilter.value.trim();
         const endDate = endDateFilter.value.trim();
-        
-        debugLog('执行筛选: 使用日期=' + useDate + 
-                 ', 修订版本=' + (revision || '无') + 
-                 ', 作者=' + (author || '无') + 
-                 ', 内容=' + (content || '无') + 
-                 ', 起始日期=' + (startDate || '无') + 
-                 ', 结束日期=' + (endDate || '无'));
-        
-        // 确保至少有一个筛选条件
-        if (useDate) {
-            // 日期筛选模式下，如果未设置日期，将使用默认的3天
-            if (!author && !content && !startDate && !endDate) {
-                debugLog('没有输入筛选条件，日期筛选模式下将使用默认的3天');
-            }
-        } else {
-            // 修订版本筛选模式下，确保至少有一个筛选条件
-            if (!revision && !author && !content) {
-                debugLog('没有输入筛选条件');
-                filterResult.textContent = '请至少输入一个筛选条件';
-                return;
-            }
+
+        if (!useDate && !revision) {
+            filterResult.textContent = '请输入修订版本范围，或直接使用关键词过滤';
+            return;
         }
-        
-        // 发送筛选消息到扩展
+
         vscode.postMessage({
             command: 'filterLogs',
-            revision: revision,
-            author: author,
-            content: content,
-            startDate: startDate,
-            endDate: endDate,
-            useDate: useDate
+            revision,
+            author: '',
+            content: '',
+            startDate,
+            endDate,
+            useDate
         });
     });
-    
-    // 清除筛选按钮点击事件
+
+    logFilterInput.addEventListener('input', () => {
+        renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
+    });
+
     clearFilterButton.addEventListener('click', () => {
         debugLog('清除筛选条件');
-        
-        // 清空筛选输入框
         revisionFilter.value = '';
-        authorFilter.value = '';
-        contentFilter.value = '';
+        logFilterInput.value = '';
         startDateFilter.value = threeDaysAgo.toISOString().split('T')[0];
         endDateFilter.value = today.toISOString().split('T')[0];
         dateFilterToggle.checked = false;
         revisionFilterSection.style.display = 'block';
         dateFilterSection.style.display = 'none';
         filterResult.textContent = '';
-        
-        // 刷新日志列表
-        vscode.postMessage({
-            command: 'refresh'
-        });
+        vscode.postMessage({ command: 'refresh' });
     });
-    
-    // 添加回车键提交筛选
-    function handleFilterKeyPress(e) {
-        if (e.key === 'Enter') {
-            filterButton.click();
-        }
-    }
-    
-    revisionFilter.addEventListener('keypress', handleFilterKeyPress);
-    authorFilter.addEventListener('keypress', handleFilterKeyPress);
-    contentFilter.addEventListener('keypress', handleFilterKeyPress);
+
+    revisionFilter.addEventListener('keypress', event => {
+        if (event.key === 'Enter') filterButton.click();
+    });
     
     // 刷新按钮事件
     refreshButton.addEventListener('click', () => {
@@ -956,10 +992,10 @@
     });
 
     generatePatchButton.addEventListener('click', () => {
-        if (!selectedRevision || generatePatchButton.disabled) return;
+        if (selectedRevisions.size === 0 || generatePatchButton.disabled) return;
         generatePatchButton.disabled = true;
         generatePatchButton.textContent = '生成中...';
-        vscode.postMessage({ command: 'generatePatch', revision: selectedRevision });
+        vscode.postMessage({ command: 'generatePatch', revisions: selectedRevisionArray() });
     });
 
     document.getElementById('changeMergeTargetButton').addEventListener('click', () => {
@@ -967,7 +1003,7 @@
     });
 
     document.getElementById('mergeToBranchButton').addEventListener('click', () => {
-        vscode.postMessage({ command: 'mergeToBranch' });
+        vscode.postMessage({ command: 'mergeToBranch', revisions: selectedRevisionArray() });
     });
 
     document.getElementById('resolveMergeConflictsButton').addEventListener('click', () => {

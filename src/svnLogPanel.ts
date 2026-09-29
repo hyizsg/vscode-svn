@@ -41,6 +41,7 @@ export class SvnLogPanel {
     private _disposables: vscode.Disposable[] = [];
     private _logEntries: SvnLogEntry[] = [];
     private _selectedRevision: string | undefined;
+    private _selectedRevisions = new Set<string>();
     private _targetPath: string;
     private _targetSvnRelativePath: string = ''; // 存储文件夹的SVN相对路径
     private _outputChannel: vscode.OutputChannel;
@@ -69,8 +70,10 @@ export class SvnLogPanel {
     private _mergeInProgress = false;
     private _mergeCancelled = false;
     private _lastMergeSourceUrl?: string;
-    private _lastMergeRevision?: number;
-    private _lastMergeMessage = '';
+    private _lastMergeRevisions: number[] = [];
+    private _lastMergeEntries: SvnLogEntry[] = [];
+    private _mergedRevisions = new Set<number>();
+    private _eligibleRevisions = new Set<number>();
 
     // AI分析时需要排除的文件扩展名
     private static readonly EXCLUDED_EXTENSIONS = [
@@ -548,36 +551,50 @@ export class SvnLogPanel {
      */
     private _updateLogList(isLoadingMore: boolean = false) {
         this._log('发送更新日志列表消息到Webview');
-        
-        // 检查目标路径是否是文件夹
+
+        const availableRevisions = new Set(this._logEntries.map(entry => entry.revision));
+        if (!isLoadingMore) {
+            this._selectedRevisions = new Set(
+                Array.from(this._selectedRevisions).filter(revision => availableRevisions.has(revision))
+            );
+            if (this._selectedRevision && !availableRevisions.has(this._selectedRevision)) {
+                this._selectedRevision = undefined;
+            }
+        }
+
+        let initialRevision: string | undefined;
+        if (this._logEntries.length > 0 && !this._selectedRevision && !isLoadingMore) {
+            initialRevision = this._logEntries[0].revision;
+            this._selectedRevision = initialRevision;
+            this._selectedRevisions.add(initialRevision);
+        }
+
         const isDirectory = fs.lstatSync(this._targetPath).isDirectory();
-        
-        // 发送日志条目到Webview，包含isLoadingMore标记
         this._panel.webview.postMessage({
             command: 'updateLogList',
             logEntries: this._logEntries,
             selectedRevision: this._selectedRevision,
+            selectedRevisions: Array.from(this._selectedRevisions),
             targetSvnRelativePath: isDirectory ? this._targetSvnRelativePath : '',
-            isDirectory: isDirectory,
-            isLoadingMore: isLoadingMore, // 标记是否为加载更多操作
-            hasMoreLogs: this._minLoadedRevision !== '1' // 如果最小版本号不是1，说明还有更多日志可加载
+            isDirectory,
+            isLoadingMore,
+            hasMoreLogs: this._minLoadedRevision !== '1'
         });
 
-        // 发送当前筛选数量信息到前端
         this._panel.webview.postMessage({
             command: 'updateLogCount',
             count: this._logEntries.length,
-            isFiltered: this._isFiltered(), // 判断是否处于筛选状态
+            isFiltered: this._isFiltered(),
             hasMoreLogs: this._minLoadedRevision !== '1',
             filterDescription: this._currentFilterState.filterDescription
         });
 
-        // 如果有日志条目，且没有选中的修订版本，自动选择第一个
-        // 注意：只在非"加载更多"模式下执行此操作
-        if (this._logEntries.length > 0 && !this._selectedRevision && !isLoadingMore) {
-            const firstRevision = this._logEntries[0].revision;
-            this._log(`自动选择第一个日志条目，修订版本: ${firstRevision}`);
-            this._showRevisionDetails(firstRevision);
+        if (initialRevision) {
+            this._log(`自动选择第一个日志条目，修订版本: ${initialRevision}`);
+            void this._showRevisionDetails(initialRevision);
+        }
+        if (!isLoadingMore) {
+            void this._postMergeTargetInfo().then(() => this._refreshMergeRevisionStatus());
         }
     }
 
@@ -803,6 +820,53 @@ export class SvnLogPanel {
         return match ? match[1] : url;
     }
 
+    private async _resolveMergeSourceUrl(targetPath: string): Promise<string> {
+        const sourceUrl = await this.svnService.getWorkingCopyUrl(this._targetPath);
+        const targetUrl = await this.svnService.getWorkingCopyUrl(targetPath);
+        const sourceRoot = this._branchRootUrl(sourceUrl);
+        const targetRoot = this._branchRootUrl(targetUrl);
+        return sourceRoot && targetRoot
+            ? sourceRoot + targetUrl.slice(targetRoot.length)
+            : sourceUrl;
+    }
+
+    private async _refreshMergeRevisionStatus(): Promise<void> {
+        if (!this._mergeTargetPath) {
+            this._mergedRevisions.clear();
+            this._eligibleRevisions.clear();
+            void this._panel.webview.postMessage({
+                command: 'mergeRevisionStatus',
+                mergedRevisions: [],
+                eligibleRevisions: []
+            });
+            return;
+        }
+
+        try {
+            const mergeSourceUrl = await this._resolveMergeSourceUrl(this._mergeTargetPath);
+            const [merged, eligible] = await Promise.all([
+                this.svnService.getMergedRevisions(this._mergeTargetPath, mergeSourceUrl),
+                this.svnService.getEligibleRevisions(this._mergeTargetPath, mergeSourceUrl)
+            ]);
+            this._mergedRevisions = merged;
+            this._eligibleRevisions = eligible;
+            void this._panel.webview.postMessage({
+                command: 'mergeRevisionStatus',
+                mergedRevisions: Array.from(merged),
+                eligibleRevisions: Array.from(eligible)
+            });
+        } catch (error: any) {
+            this._log(`检测分支合并状态失败: ${error.message}`);
+            this._mergedRevisions.clear();
+            this._eligibleRevisions.clear();
+            void this._panel.webview.postMessage({
+                command: 'mergeRevisionStatus',
+                mergedRevisions: [],
+                eligibleRevisions: []
+            });
+        }
+    }
+
     private async _postMergeTargetInfo(): Promise<void> {
         if (!this._mergeTargetPath) {
             const saved = this.context.globalState.get<string>(STATE_KEY_MERGE_TARGET, '');
@@ -859,48 +923,57 @@ export class SvnLogPanel {
         this._mergeTargetPath = targetPath;
         await this.context.globalState.update(STATE_KEY_MERGE_TARGET, targetPath);
         await this._postMergeTargetInfo();
+        await this._refreshMergeRevisionStatus();
         return true;
     }
 
     private async _mergeToBranch(): Promise<void> {
         if (this._mergeInProgress) { return; }
+        if (!this._mergeTargetPath && !(await this._chooseMergeTarget())) { return; }
 
-        const entry = this._logEntries.find(item => item.revision === this._selectedRevision);
-        const revision = Number(entry?.revision);
-        if (!entry || !Number.isInteger(revision) || revision <= 0) {
+        const selectedEntries = this._logEntries
+            .filter(item => this._selectedRevisions.has(item.revision))
+            .sort((left, right) => Number(left.revision) - Number(right.revision));
+        if (selectedEntries.length === 0) {
             vscode.window.showWarningMessage('请选择要合并的日志版本');
             return;
         }
-        if (!this._mergeTargetPath && !(await this._chooseMergeTarget())) { return; }
 
+        const skippedEntries = selectedEntries.filter(entry => this._mergedRevisions.has(Number(entry.revision)));
+        const mergeEntries = selectedEntries.filter(entry => !this._mergedRevisions.has(Number(entry.revision)));
+        if (mergeEntries.length === 0) {
+            vscode.window.showInformationMessage('选中的版本均已合并到目标分支');
+            return;
+        }
+
+        const revisions = mergeEntries.map(entry => Number(entry.revision));
+        const revisionRange = revisions.join(',');
+        const revisionText = revisions.map(revision => `r${revision}`).join('、');
         const target = this._mergeTargetPath!;
         const webview = this._panel.webview;
         const appendOutput = (text: string) => webview.postMessage({ command: 'appendMergeOutput', text });
         const onProgress = (line: string) => appendOutput(`${line}\n`);
 
-        this._lastMergeRevision = revision;
-        this._lastMergeMessage = entry.message;
+        this._lastMergeRevisions = revisions;
+        this._lastMergeEntries = mergeEntries;
         this._mergeInProgress = true;
         this._mergeCancelled = false;
         let mergeApplied = false;
         webview.postMessage({ command: 'mergeStarted', clearOutput: true });
 
         try {
-            const sourceUrl = await this.svnService.getWorkingCopyUrl(this._targetPath);
             const targetUrl = await this.svnService.getWorkingCopyUrl(target);
+            const mergeSourceUrl = await this._resolveMergeSourceUrl(target);
             this._throwIfMergeCancelled();
-
-            const sourceRoot = this._branchRootUrl(sourceUrl);
-            const targetRoot = this._branchRootUrl(targetUrl);
-            const mergeSourceUrl = sourceRoot && targetRoot
-                ? sourceRoot + targetUrl.slice(targetRoot.length)
-                : sourceUrl;
             if (mergeSourceUrl === targetUrl) {
                 throw new Error('目标目录与当前日志目录属于同一分支，无需合并');
             }
             this._lastMergeSourceUrl = mergeSourceUrl;
 
-            appendOutput(`\n========== 合并 r${revision} 到分支 ==========\n`);
+            appendOutput(`\n========== 合并 ${revisionText} 到分支 ==========\n`);
+            if (skippedEntries.length > 0) {
+                appendOutput(`已跳过已合并版本: ${skippedEntries.map(entry => `r${entry.revision}`).join('、')}\n`);
+            }
             appendOutput(`合并源: ${mergeSourceUrl}\n目标目录: ${target}\n`);
 
             const localChanges = (await this.svnService.executeSvnCommand('status -q', target)).trim();
@@ -924,9 +997,9 @@ export class SvnLogPanel {
             await this.svnService.updateToHead(target, onProgress);
             this._throwIfMergeCancelled();
 
-            appendOutput(`\n正在执行 svn merge -c ${revision}…\n`);
+            appendOutput(`\n正在执行 svn merge -c ${revisionRange}…\n`);
             mergeApplied = true;
-            await this.svnService.merge(target, mergeSourceUrl, { revisionRange: String(revision), onProgress });
+            await this.svnService.merge(target, mergeSourceUrl, { revisionRange, onProgress });
             this._throwIfMergeCancelled();
 
             const conflicts = await this.svnService.getMergeConflicts(target);
@@ -966,8 +1039,9 @@ export class SvnLogPanel {
     private async _commitMerge(mergeSourceUrl?: string): Promise<void> {
         if (this._mergeInProgress) { return; }
         const target = this._mergeTargetPath;
-        const revision = this._lastMergeRevision;
-        if (!target || !revision) { return; }
+        const revisions = this._lastMergeRevisions;
+        const entries = this._lastMergeEntries;
+        if (!target || revisions.length === 0 || entries.length === 0) { return; }
 
         const webview = this._panel.webview;
         const appendOutput = (text: string) => webview.postMessage({ command: 'appendMergeOutput', text });
@@ -988,7 +1062,12 @@ export class SvnLogPanel {
             if (mergeSourceUrl) { this._lastMergeSourceUrl = mergeSourceUrl; }
             const sourceUrl = mergeSourceUrl || this._lastMergeSourceUrl || await this.svnService.getWorkingCopyUrl(this._targetPath);
             this._throwIfMergeCancelled();
-            const message = `Merged revision ${revision} from ${this._shortBranchName(sourceUrl)}:\n${this._lastMergeMessage}`;
+            const revisionList = revisions.join(', ');
+            const detail = entries.length === 1
+                ? entries[0].message
+                : entries.map(entry => `r${entry.revision}: ${entry.message}`).join('\n\n');
+            const revisionLabel = revisions.length === 1 ? `revision ${revisionList}` : `revisions ${revisionList}`;
+            const message = `Merged ${revisionLabel} from ${this._shortBranchName(sourceUrl)}:\n${detail}`;
             appendOutput(`\n正在提交合并结果…\n提交信息:\n${message}\n\n`);
 
             this.svnService.onCommandOutput = (data: string) => appendOutput(data);
@@ -998,9 +1077,11 @@ export class SvnLogPanel {
                 this.svnService.onCommandOutput = undefined;
             }
 
-            appendOutput(`\n✅ r${revision} 已合并并提交到 ${path.basename(target)}\n`);
+            const revisionText = revisions.map(revision => `r${revision}`).join('、');
+            appendOutput(`\n✅ ${revisionText} 已合并并提交到 ${path.basename(target)}\n`);
             webview.postMessage({ command: 'mergeFinished', success: true, hasConflicts: false });
-            vscode.window.showInformationMessage(`r${revision} 已合并并提交到 ${path.basename(target)}`);
+            vscode.window.showInformationMessage(`${revisionText} 已合并并提交到 ${path.basename(target)}`);
+            await this._refreshMergeRevisionStatus();
         } catch (error: any) {
             if (this._mergeCancelled) {
                 appendOutput('\n已取消提交合并（合并结果仍保留在目标工作副本中，可点击「再次提交」重试）\n');
@@ -1022,15 +1103,33 @@ export class SvnLogPanel {
             async (message) => {
                 this._log(`收到Webview消息: ${message.command}`);
                 switch (message.command) {
+                    case 'selectRevisions':
+                        this._selectedRevisions = new Set(
+                            (Array.isArray(message.revisions) ? message.revisions : [])
+                                .map(String)
+                                .filter((revision: string) => this._logEntries.some(entry => entry.revision === revision))
+                        );
+                        break;
                     case 'selectRevision':
                         this._log(`选择修订版本: ${message.revision}`);
+                        if (Array.isArray(message.revisions)) {
+                            this._selectedRevisions = new Set(message.revisions.map(String));
+                        } else {
+                            this._selectedRevisions.add(String(message.revision));
+                        }
                         await this._showRevisionDetails(message.revision);
-                        await this._postMergeTargetInfo();
                         break;
                     case 'generatePatch':
-                        await this._generatePatch(message.revision || this._selectedRevision);
+                        await this._generatePatch(
+                            Array.isArray(message.revisions)
+                                ? message.revisions.map(String)
+                                : Array.from(this._selectedRevisions)
+                        );
                         break;
                     case 'mergeToBranch':
+                        if (Array.isArray(message.revisions)) {
+                            this._selectedRevisions = new Set(message.revisions.map(String));
+                        }
                         await this._mergeToBranch();
                         break;
                     case 'chooseMergeTarget':
@@ -1493,15 +1592,18 @@ export class SvnLogPanel {
         }
     }
 
-    private async _generatePatch(revision: string): Promise<void> {
-        const entry = this._logEntries.find(item => item.revision === revision);
-        if (!entry) {
-            vscode.window.showErrorMessage(`未找到修订版本 r${revision}`);
+    private async _generatePatch(revisions: string[]): Promise<void> {
+        const selected = new Set(revisions);
+        const entries = this._logEntries
+            .filter(item => selected.has(item.revision))
+            .sort((left, right) => Number(left.revision) - Number(right.revision));
+        if (entries.length === 0) {
+            vscode.window.showErrorMessage('请选择要生成 patch 的日志版本');
             return;
         }
         this._panel.webview.postMessage({ command: 'patchGenerationStarted' });
         try {
-            await this.patchGenerator.generate(entry, this._targetPath);
+            await this.patchGenerator.generateMany(entries, this._targetPath);
         } catch (error: any) {
             this._log(`生成 patch 失败: ${error.message}`);
             vscode.window.showErrorMessage(`生成 patch 失败: ${error.message}`);

@@ -21,6 +21,13 @@ interface PatchPathMappings {
     battleSource?: string;
 }
 
+interface AggregatedPatchPath {
+    action: string;
+    path: string;
+    oldRevision: number;
+    newRevision: number;
+}
+
 export class PatchGenerator {
     private readonly output = getOutputChannel();
 
@@ -48,54 +55,103 @@ export class PatchGenerator {
     }
 
     public async generate(entry: PatchLogEntry, targetPath: string): Promise<void> {
+        await this.generateMany([entry], targetPath);
+    }
+
+    public async generateMany(entries: PatchLogEntry[], targetPath: string): Promise<void> {
+        if (entries.length === 0) {
+            throw new Error('请选择要生成 patch 的日志版本');
+        }
+
         const projectDev = this.findProjectDev(targetPath);
         if (!projectDev) {
             throw new Error('无法找到 project_dev 目录，请从 client 工作副本内打开日志或提交面板');
         }
-        if (!entry.paths?.length) {
-            throw new Error(`r${entry.revision} 没有可用于生成 patch 的文件记录`);
-        }
 
-        const revision = Number(entry.revision);
-        if (!Number.isInteger(revision) || revision <= 1) {
-            throw new Error(`无效的 SVN 版本号: ${entry.revision}`);
-        }
+        const sortedEntries = [...entries].sort((left, right) => Number(left.revision) - Number(right.revision));
+        const revisions = sortedEntries.map(entry => {
+            if (!entry.paths?.length) {
+                throw new Error(`r${entry.revision} 没有可用于生成 patch 的文件记录`);
+            }
+            const revision = Number(entry.revision);
+            if (!Number.isInteger(revision) || revision <= 1) {
+                throw new Error(`无效的 SVN 版本号: ${entry.revision}`);
+            }
+            return revision;
+        });
+        const aggregateEntry = this.createAggregateEntry(sortedEntries);
+        const aggregatePaths = this.aggregatePaths(sortedEntries);
 
         await vscode.window.withProgress({
             location: vscode.ProgressLocation.Notification,
-            title: `正在根据 r${revision} 生成 patch...`,
+            title: sortedEntries.length === 1
+                ? `正在根据 r${revisions[0]} 生成 patch...`
+                : `正在计算 ${sortedEntries.length} 个版本的最终 patch...`,
             cancellable: false
         }, async progress => {
-            progress.report({ message: '读取 SVN 版本信息' });
+            progress.report({ message: '计算选中版本的最终差异' });
             const repoRoot = await this.getRepositoryRoot(targetPath);
             const mappings = await this.getPathMappings(projectDev, repoRoot);
-            const configPaths = entry.paths!.filter(item => this.getConfigKind(item.path, mappings) !== undefined);
-            const codePaths = entry.paths!.filter(item => this.getModuleName(item.path, mappings) !== undefined);
+            const configPaths = aggregatePaths.filter(item => this.getConfigKind(item.path, mappings) !== undefined);
+            const codePaths = aggregatePaths.filter(item => this.getModuleName(item.path, mappings) !== undefined);
 
             let configPatch = '';
             if (configPaths.length > 0) {
-                progress.report({ message: '生成配置表 patch' });
-                configPatch = await this.generateConfigPatch(projectDev, repoRoot, revision, entry, configPaths, mappings);
+                progress.report({ message: '生成配置表最终 patch' });
+                configPatch = await this.generateConfigPatch(projectDev, repoRoot, aggregateEntry, configPaths, mappings);
             }
 
             let codePatch = '';
             if (codePaths.length > 0) {
-                progress.report({ message: '分析 Lua 代码改动' });
-                codePatch = await this.generateCodePatch(repoRoot, revision, codePaths, configPatch, mappings);
+                progress.report({ message: '生成 Lua 代码最终 patch' });
+                codePatch = await this.generateCodePatch(repoRoot, codePaths, configPatch, mappings);
             }
 
             if (!configPatch && !codePatch) {
-                throw new Error('该日志没有可生成 patch 的 Lua 代码或配置表修改');
+                throw new Error('选中的日志没有可生成 patch 的 Lua 代码或配置表修改');
             }
 
-            const body = codePatch || configPatch;
-            const block = this.formatPatchBlock(body, entry);
             const patchFile = path.join(projectDev, 'src', 'patch.lua');
-            await this.validateAndAppend(block, patchFile);
+            await this.validateAndAppend(this.formatPatchBlock(codePatch || configPatch, aggregateEntry), patchFile);
             const document = await vscode.workspace.openTextDocument(patchFile);
             await vscode.window.showTextDocument(document, { preview: false });
-            vscode.window.showInformationMessage(`已将 r${revision} patch 追加到 patch.lua`);
+            const revisionText = revisions.map(revision => `r${revision}`).join('、');
+            vscode.window.showInformationMessage(`已将 ${revisionText} 的最终 patch 追加到 patch.lua`);
         });
+    }
+
+    private createAggregateEntry(entries: PatchLogEntry[]): PatchLogEntry {
+        if (entries.length === 1) { return entries[0]; }
+        const authors = Array.from(new Set(entries.map(entry => entry.author.trim()).filter(Boolean)));
+        return {
+            revision: entries.map(entry => entry.revision).join(','),
+            author: authors.join('、'),
+            message: entries.map(entry => `r${entry.revision}: ${entry.message.trim() || '无提交信息'}`).join('\n\n')
+        };
+    }
+
+    private aggregatePaths(entries: PatchLogEntry[]): AggregatedPatchPath[] {
+        const paths = new Map<string, AggregatedPatchPath>();
+        for (const entry of entries) {
+            const revision = Number(entry.revision);
+            for (const item of entry.paths!) {
+                const existing = paths.get(item.path);
+                if (existing) {
+                    if (existing.action === 'M' && item.action !== 'M') {
+                        existing.action = item.action;
+                    }
+                    existing.newRevision = revision;
+                } else {
+                    paths.set(item.path, {
+                        action: item.action,
+                        path: item.path,
+                        oldRevision: revision - 1,
+                        newRevision: revision
+                    });
+                }
+            }
+        }
+        return Array.from(paths.values());
     }
 
     private findProjectDev(targetPath: string): string | undefined {
@@ -183,9 +239,8 @@ export class PatchGenerator {
     private async generateConfigPatch(
         projectDev: string,
         repoRoot: string,
-        revision: number,
         entry: PatchLogEntry,
-        paths: Array<{ action: string; path: string }>,
+        paths: AggregatedPatchPath[],
         mappings: PatchPathMappings
     ): Promise<string> {
         const modified = paths.filter(item => item.action === 'M');
@@ -200,7 +255,6 @@ export class PatchGenerator {
             patches.push(await this.runConfigGenerator(
                 projectDev,
                 repoRoot,
-                revision,
                 entry,
                 dataPaths,
                 'create_patch.lua',
@@ -213,7 +267,6 @@ export class PatchGenerator {
             patches.push(await this.runConfigGenerator(
                 projectDev,
                 repoRoot,
-                revision,
                 entry,
                 battlePaths,
                 'create_patch_battle.lua',
@@ -228,9 +281,8 @@ export class PatchGenerator {
     private async runConfigGenerator(
         projectDev: string,
         repoRoot: string,
-        revision: number,
         entry: PatchLogEntry,
-        paths: Array<{ action: string; path: string }>,
+        paths: AggregatedPatchPath[],
         generatorName: string,
         outputName: string,
         dataDir: string,
@@ -253,10 +305,10 @@ export class PatchGenerator {
                 const fileName = path.posix.basename(item.path);
                 const url = `${repoRoot}${item.path}`;
                 const oldContent = await this.svnService.executeSvnCommand(
-                    `cat -r ${revision - 1} "${url}@${revision - 1}"`, projectDev, false
+                    `cat -r ${item.oldRevision} "${url}@${item.newRevision}"`, projectDev, false
                 );
                 const newContent = await this.svnService.executeSvnCommand(
-                    `cat -r ${revision} "${url}@${revision}"`, projectDev, false
+                    `cat -r ${item.newRevision} "${url}@${item.newRevision}"`, projectDev, false
                 );
                 fs.writeFileSync(path.join(oldDir, fileName), oldContent, 'utf8');
                 fs.writeFileSync(path.join(newDir, fileName), newContent, 'utf8');
@@ -266,7 +318,7 @@ export class PatchGenerator {
             if (withMetadata) {
                 const localUser = os.userInfo().username;
                 const author = entry.author && entry.author !== localUser ? `${localUser} for ${entry.author}` : localUser;
-                args.push(dataDir, author, entry.message || `r${revision}`);
+                args.push(dataDir, author, entry.message || `r${entry.revision}`);
             }
             args.push(...paths.map(item => path.posix.basename(item.path)));
             await this.execFile('lua', args, tempDir);
@@ -282,8 +334,7 @@ export class PatchGenerator {
 
     private async generateCodePatch(
         repoRoot: string,
-        revision: number,
-        paths: Array<{ action: string; path: string }>,
+        paths: AggregatedPatchPath[],
         configPatch: string,
         mappings: PatchPathMappings
     ): Promise<string> {
@@ -297,13 +348,13 @@ export class PatchGenerator {
             const url = `${repoRoot}${item.path}`;
             const [diff, oldSource, newSource] = await Promise.all([
                 this.svnService.executeSvnCommand(
-                    `diff -c ${revision} "${url}@${revision}"`, path.dirname(__filename), false
+                    `diff -r ${item.oldRevision}:${item.newRevision} "${url}@${item.newRevision}"`, path.dirname(__filename), false
                 ),
                 this.svnService.executeSvnCommand(
-                    `cat -r ${revision - 1} "${url}@${revision - 1}"`, path.dirname(__filename), false
+                    `cat -r ${item.oldRevision} "${url}@${item.newRevision}"`, path.dirname(__filename), false
                 ),
                 this.svnService.executeSvnCommand(
-                    `cat -r ${revision} "${url}@${revision}"`, path.dirname(__filename), false
+                    `cat -r ${item.newRevision} "${url}@${item.newRevision}"`, path.dirname(__filename), false
                 )
             ]);
             const generated = generateLuaModulePatch(moduleName, oldSource, newSource, diff);

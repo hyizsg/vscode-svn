@@ -8,7 +8,6 @@ import { SvnUpdatePanel } from './updatePanel';
 import { CommitLogStorage } from './commitLogStorage';
 import { SvnFolderCommitPanel } from './folderCommitPanel';
 import { SvnLogPanel } from './svnLogPanel';
-import { MergeToBranchPanel } from './mergeToBranchPanel';
 import { SvnFilterService } from './filterService';
 import { AiCacheService } from './aiCacheService';
 import { AiService } from './aiService';
@@ -2698,23 +2697,6 @@ export function activate(context: vscode.ExtensionContext) {
     await updateDirectory(workspaceFolder.uri.fsPath);
   });
 
-  // 注册“合并到其他分支”命令
-  const mergeToBranchCommand = vscode.commands.registerCommand('vscode-svn.mergeToBranch', async (folderUri?: vscode.Uri) => {
-    if (!folderUri) {
-      if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-        folderUri = vscode.workspace.workspaceFolders[0].uri;
-      } else {
-        vscode.window.showErrorMessage('请右键一个工作副本目录');
-        return;
-      }
-    }
-    if (folderUri.scheme !== 'file') {
-      vscode.window.showErrorMessage('只支持本地目录');
-      return;
-    }
-    MergeToBranchPanel.createOrShow(context, svnService, folderUri.fsPath);
-  });
-
   // 注册恢复文件命令
   const revertFileCommand = vscode.commands.registerCommand('vscode-svn.revertFile', async (fileUri?: vscode.Uri) => {
     if (!fileUri) {
@@ -3168,8 +3150,7 @@ export function activate(context: vscode.ExtensionContext) {
   // 中文别名命令：用于右键菜单展示中文标题，内部转发到原英文命令
   const zhAliasPairs: [string, string][] = [
     ['vscode-svn.updateDirectory',         'vscode-svn.updateDirectory.zh'],
-        ['vscode-svn.uploadFolder',            'vscode-svn.uploadFolder.zh'],
-        ['vscode-svn.mergeToBranch',           'vscode-svn.mergeToBranch.zh'],
+    ['vscode-svn.uploadFolder',            'vscode-svn.uploadFolder.zh'],
     ['vscode-svn.updateFile',              'vscode-svn.updateFile.zh'],
     ['vscode-svn.commitFile',              'vscode-svn.commitFile.zh'],
     ['vscode-svn.diff',                    'vscode-svn.diff.zh'],
@@ -3215,7 +3196,6 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     uploadFileCommand,
     uploadFolderCommand,
-    mergeToBranchCommand,
     commitFileCommand,
     setSvnRootCommand,
     clearSvnRootCommand,

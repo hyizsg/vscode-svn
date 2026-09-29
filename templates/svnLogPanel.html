@@ -47,15 +47,10 @@
             </div>
         </div>
         
-        <div class="filter-group">
-            <span class="filter-label">作者:</span>
-            <input type="text" id="authorFilter" class="filter-input" placeholder="作者名称">
+        <div class="filter-group log-text-filter-group">
+            <input type="text" id="logFilterInput" class="filter-input log-text-filter" placeholder="过滤：输入作者、日志关键词、版本号…（空格 AND，+ OR）">
         </div>
-        <div class="filter-group">
-            <span class="filter-label">内容:</span>
-            <input type="text" id="contentFilter" class="filter-input" placeholder="日志内容">
-        </div>
-        <button id="filterButton" class="filter-button">筛选</button>
+        <button id="filterButton" class="filter-button">筛选版本/日期</button>
         <button id="clearFilterButton" class="filter-button filter-clear">清除</button>
         <div class="filter-result" id="filterResult"></div>
     </div>

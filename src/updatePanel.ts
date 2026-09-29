@@ -261,15 +261,12 @@ export class SvnUpdatePanel {
       // 通知完成
       this.panel.webview.postMessage({ command: 'updateComplete', success: true });
       vscode.window.showInformationMessage(`SVN更新完成`);
-      // 扫描冲突
-      await this.refreshAndPostConflicts();
     } catch (error: any) {
       const errMsg = `更新失败: ${error.message}\n`;
       this.updateOutput += errMsg;
       this.panel.webview.postMessage({ command: 'appendOutput', text: errMsg });
       this.panel.webview.postMessage({ command: 'updateComplete', success: false });
       vscode.window.showErrorMessage(`SVN更新失败: ${error.message}`);
-      // 即使失败也可能有部分冲突产生，尝试扫描
       await this.refreshAndPostConflicts();
     } finally {
       this.isUpdating = false;
