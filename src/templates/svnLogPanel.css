@@ -676,15 +676,6 @@ button:hover {
     align-items: center;
 }
 
-.filter-mode-toggle {
-    display: flex;
-    align-items: center;
-    margin-right: 15px;
-    padding: 5px;
-    background-color: var(--vscode-button-secondaryBackground);
-    border-radius: 4px;
-}
-
 #revisionFilterSection, #dateFilterSection {
     display: flex;
     gap: 10px;

@@ -26,9 +26,6 @@
     const filterResult = document.getElementById('filterResult');
     
     // 日期筛选表单元素
-    const dateFilterToggle = document.getElementById('dateFilterToggle');
-    const revisionFilterSection = document.getElementById('revisionFilterSection');
-    const dateFilterSection = document.getElementById('dateFilterSection');
     const startDateFilter = document.getElementById('startDateFilter');
     const endDateFilter = document.getElementById('endDateFilter');
     
@@ -40,14 +37,6 @@
     // 格式化为 YYYY-MM-DD
     startDateFilter.value = threeDaysAgo.toISOString().split('T')[0];
     endDateFilter.value = today.toISOString().split('T')[0];
-    
-    // 日期筛选切换事件
-    dateFilterToggle.addEventListener('change', () => {
-        const useDate = dateFilterToggle.checked;
-        revisionFilterSection.style.display = useDate ? 'none' : 'block';
-        dateFilterSection.style.display = useDate ? 'block' : 'none';
-        debugLog('切换筛选模式: ' + (useDate ? '日期筛选' : '修订版本筛选'));
-    });
     
     // 存储目标路径信息
     let targetPath = '';
@@ -1196,13 +1185,13 @@
     
     // 筛选按钮点击事件
     filterButton.addEventListener('click', () => {
-        const useDate = dateFilterToggle.checked;
         const revision = revisionFilter.value.trim();
         const startDate = startDateFilter.value.trim();
         const endDate = endDateFilter.value.trim();
+        const useDate = Boolean(startDate || endDate);
 
         if (!useDate && !revision) {
-            filterResult.textContent = '请输入修订版本范围，或直接使用关键词过滤';
+            filterResult.textContent = '请输入修订版本或日期范围，或直接使用关键词过滤';
             return;
         }
 
@@ -1227,9 +1216,6 @@
         logFilterInput.value = '';
         startDateFilter.value = threeDaysAgo.toISOString().split('T')[0];
         endDateFilter.value = today.toISOString().split('T')[0];
-        dateFilterToggle.checked = false;
-        revisionFilterSection.style.display = 'block';
-        dateFilterSection.style.display = 'none';
         filterResult.textContent = '';
         vscode.postMessage({ command: 'refresh' });
     });

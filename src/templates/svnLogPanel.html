@@ -20,23 +20,18 @@
     
     <!-- 日志筛选表单 -->
     <div class="filter-form">
-        <div class="filter-mode-toggle">
-            <label class="filter-label">
-                <input type="checkbox" id="dateFilterToggle" class="filter-checkbox">
-                <span>使用日期筛选</span>
-            </label>
-        </div>
-        
-        <!-- 修订版本筛选区域 -->
         <div id="revisionFilterSection">
             <div class="filter-group">
                 <span class="filter-label">修订版本:</span>
                 <input type="text" id="revisionFilter" class="filter-input" placeholder="如: 100 或 100:200">
             </div>
         </div>
-        
-        <!-- 日期筛选区域 -->
-        <div id="dateFilterSection" style="display: none;">
+
+        <div class="filter-group log-text-filter-group">
+            <input type="text" id="logFilterInput" class="filter-input log-text-filter" placeholder="过滤：输入作者、日志关键词、版本号…（空格 AND，+ OR）">
+        </div>
+
+        <div id="dateFilterSection">
             <div class="filter-group">
                 <span class="filter-label">起始日期:</span>
                 <input type="date" id="startDateFilter" class="filter-input">
@@ -46,11 +41,8 @@
                 <input type="date" id="endDateFilter" class="filter-input">
             </div>
         </div>
-        
-        <div class="filter-group log-text-filter-group">
-            <input type="text" id="logFilterInput" class="filter-input log-text-filter" placeholder="过滤：输入作者、日志关键词、版本号…（空格 AND，+ OR）">
-        </div>
-        <button id="filterButton" class="filter-button">筛选版本/日期</button>
+
+        <button id="filterButton" class="filter-button">筛选</button>
         <button id="clearFilterButton" class="filter-button filter-clear">清除</button>
         <div class="filter-result" id="filterResult"></div>
     </div>
