@@ -543,7 +543,7 @@ body.box-selecting .log-entry {
     min-width: 0;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 10px;
     overflow: hidden;
     white-space: nowrap;
 }
@@ -557,11 +557,10 @@ body.box-selecting .log-entry {
 #loadMoreControl {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
 }
 
-.log-footer-navigation button {
-    padding: 4px 10px;
+.log-footer-navigation {
+    gap: 10px;
 }
 
 .log-footer-actions {
@@ -571,10 +570,12 @@ body.box-selecting .log-entry {
     gap: 10px;
 }
 
-.log-footer-actions button {
+.log-footer button {
+    box-sizing: border-box;
+    width: 104px;
+    height: 36px;
     margin: 0;
-    min-width: 96px;
-    padding: 6px 16px;
+    padding: 6px 12px;
 }
 
 #changeMergeTargetButton,
@@ -594,11 +595,19 @@ body.box-selecting .log-entry {
     align-items: center;
     justify-content: center;
     line-height: 1.25;
-    padding: 3px 14px;
+    padding: 3px 10px;
+}
+
+#mergeToBranchButton .btn-line1 {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 12px;
 }
 
 .two-line-button .btn-line2 {
-    max-width: 220px;
+    max-width: 100%;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
