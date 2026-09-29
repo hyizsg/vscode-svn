@@ -10,11 +10,6 @@
     <div class="toolbar">
         <div class="toolbar-actions">
             <button id="refreshButton">刷新</button>
-            <button id="generatePatchButton" style="display:none;">生成 patch</button>
-        </div>
-        <div>
-            <span>SVN日志: {{TARGET_NAME}}</span>
-            <span id="logCountInfo" class="log-count-info" style="margin-left: 10px; color: var(--vscode-descriptionForeground); font-size: 0.9em;"></span>
         </div>
     </div>
     
@@ -91,6 +86,32 @@
             </div>
         </div>
     </div>
+
+    <div id="mergeOutputSection" class="merge-output-section" style="display: none;">
+        <div class="merge-output-header">合并输出</div>
+        <div id="mergeOutput" class="merge-output"></div>
+    </div>
+
+    <div class="log-footer">
+        <div class="log-footer-info">
+            <span id="targetNameInfo">SVN日志: {{TARGET_NAME}}</span>
+            <span id="logCountInfo" class="log-count-info"></span>
+        </div>
+        <div class="log-footer-actions">
+            <button id="changeMergeTargetButton" class="secondary-button" style="display:none;" title="切换要合并到的分支目录">切换目录</button>
+            <button id="mergeToBranchButton" class="two-line-button" style="display:none;" title="将选中的日志版本合并到所选分支目录并自动提交">
+                <span class="btn-line1">合并到分支...</span>
+                <span class="btn-line2"></span>
+            </button>
+            <button id="resolveMergeConflictsButton" style="display:none;" title="打开冲突解决面板">解决冲突</button>
+            <button id="commitMergeButton" style="display:none;" title="冲突解决后提交合并结果">提交合并</button>
+            <button id="retryCommitMergeButton" style="display:none;" title="按原提交信息再次提交合并结果">再次提交</button>
+            <button id="generatePatchButton" style="display:none;" title="根据选中的日志版本生成 Lua patch">生成 patch</button>
+            <button id="cancelMergeButton" style="display:none;">取消</button>
+            <button id="closeLogPanelButton">关闭</button>
+        </div>
+    </div>
+
     <div class="loading" id="loading">
         <div class="loading-text">加载中...</div>
     </div>

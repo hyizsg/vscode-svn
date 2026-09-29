@@ -5,6 +5,9 @@
     const loading = document.getElementById('loading');
     const refreshButton = document.getElementById('refreshButton');
     const generatePatchButton = document.getElementById('generatePatchButton');
+    const mergeOutputSection = document.getElementById('mergeOutputSection');
+    const mergeOutput = document.getElementById('mergeOutput');
+    const targetNameInfo = document.getElementById('targetNameInfo');
     const localRevisionInfo = document.getElementById('localRevisionInfo');
     const localRevisionNumber = document.getElementById('localRevisionNumber');
     
@@ -185,6 +188,77 @@
             }
         }
     }
+
+    const FOOTER_BUTTONS = [
+        'changeMergeTargetButton', 'mergeToBranchButton',
+        'resolveMergeConflictsButton', 'commitMergeButton', 'retryCommitMergeButton',
+        'generatePatchButton', 'cancelMergeButton', 'closeLogPanelButton'
+    ];
+    let mergeTargetInfo = null;
+    let mergeRunning = false;
+
+    function setFooterButtons(visibleIds) {
+        const visible = new Set(visibleIds);
+        FOOTER_BUTTONS.forEach(id => {
+            const button = document.getElementById(id);
+            if (!button) return;
+            if (visible.has(id)) {
+                button.style.display = button.classList.contains('two-line-button') ? 'inline-flex' : 'inline-block';
+            } else {
+                button.style.display = 'none';
+            }
+        });
+    }
+
+    function renderMergeTargetButton() {
+        const button = document.getElementById('mergeToBranchButton');
+        if (!button) return;
+        const line1 = button.querySelector('.btn-line1');
+        const line2 = button.querySelector('.btn-line2');
+        if (mergeTargetInfo) {
+            line1.textContent = '合并到(' + mergeTargetInfo.dirName + ')';
+            line2.textContent = mergeTargetInfo.branchName || '';
+            button.title = '将 r' + (selectedRevision || '') + ' 合并到 ' + mergeTargetInfo.targetPath + ' 并自动提交';
+        } else {
+            line1.textContent = '合并到分支...';
+            line2.textContent = '';
+            button.title = '选择要合并到的分支目录，然后自动合并并提交选中版本';
+        }
+    }
+
+    function showSelectedRevisionButtons() {
+        const buttons = selectedRevision
+            ? ['generatePatchButton', 'changeMergeTargetButton', 'mergeToBranchButton', 'closeLogPanelButton']
+            : ['closeLogPanelButton'];
+        setFooterButtons(buttons);
+        renderMergeTargetButton();
+    }
+
+    function showMergeOutput(clearOutput) {
+        mergeOutputSection.style.display = 'flex';
+        document.body.classList.add('merging');
+        if (clearOutput) {
+            mergeOutput.textContent = '';
+        }
+    }
+
+    function appendMergeOutput(text) {
+        mergeOutput.textContent += text || '';
+        mergeOutput.scrollTop = mergeOutput.scrollHeight;
+    }
+
+    function onMergeFinished(success, hasConflicts, commitFailed) {
+        mergeRunning = false;
+        if (success && hasConflicts) {
+            setFooterButtons(['resolveMergeConflictsButton', 'commitMergeButton', 'closeLogPanelButton']);
+        } else if (success) {
+            setFooterButtons(['generatePatchButton', 'closeLogPanelButton']);
+        } else if (commitFailed) {
+            setFooterButtons(['retryCommitMergeButton', 'closeLogPanelButton']);
+        } else {
+            showSelectedRevisionButtons();
+        }
+    }
     
     debugLog('Webview脚本已初始化');
     
@@ -245,9 +319,8 @@
             case 'updateTargetName':
                 debugLog('更新目标路径名称: ' + message.targetName);
                 targetName = message.targetName;
-                const targetElement = document.querySelector('.toolbar span');
-                if (targetElement) {
-                    targetElement.textContent = 'SVN日志: ' + message.targetName;
+                if (targetNameInfo) {
+                    targetNameInfo.textContent = 'SVN日志: ' + message.targetName;
                 }
                 break;
             case 'updateTargetPath':
@@ -274,10 +347,32 @@
                     debugLog('更新SVN相对路径: ' + targetSvnRelativePath);
                 }
                 
+                selectedRevision = message.revision;
                 renderRevisionDetails(message.details);
-                generatePatchButton.style.display = 'inline-block';
                 generatePatchButton.disabled = false;
                 generatePatchButton.textContent = '生成 patch';
+                if (!mergeRunning && !document.body.classList.contains('merging')) {
+                    showSelectedRevisionButtons();
+                }
+                break;
+            case 'mergeTargetInfo':
+                mergeTargetInfo = message.info || null;
+                renderMergeTargetButton();
+                break;
+            case 'mergeStarted': {
+                mergeRunning = true;
+                showMergeOutput(message.clearOutput === true);
+                setFooterButtons(['cancelMergeButton']);
+                const cancelButton = document.getElementById('cancelMergeButton');
+                cancelButton.disabled = false;
+                cancelButton.textContent = '取消';
+                break;
+            }
+            case 'appendMergeOutput':
+                appendMergeOutput(message.text);
+                break;
+            case 'mergeFinished':
+                onMergeFinished(message.success === true, message.hasConflicts === true, message.commitFailed === true);
                 break;
             case 'patchGenerationStarted':
                 generatePatchButton.disabled = true;
@@ -888,4 +983,36 @@
         generatePatchButton.textContent = '生成中...';
         vscode.postMessage({ command: 'generatePatch', revision: selectedRevision });
     });
+
+    document.getElementById('changeMergeTargetButton').addEventListener('click', () => {
+        vscode.postMessage({ command: 'chooseMergeTarget' });
+    });
+
+    document.getElementById('mergeToBranchButton').addEventListener('click', () => {
+        vscode.postMessage({ command: 'mergeToBranch' });
+    });
+
+    document.getElementById('resolveMergeConflictsButton').addEventListener('click', () => {
+        vscode.postMessage({ command: 'openMergeConflicts' });
+    });
+
+    document.getElementById('commitMergeButton').addEventListener('click', () => {
+        vscode.postMessage({ command: 'commitMerge' });
+    });
+
+    document.getElementById('retryCommitMergeButton').addEventListener('click', () => {
+        vscode.postMessage({ command: 'commitMerge' });
+    });
+
+    document.getElementById('cancelMergeButton').addEventListener('click', event => {
+        event.currentTarget.disabled = true;
+        event.currentTarget.textContent = '取消中...';
+        vscode.postMessage({ command: 'cancelMerge' });
+    });
+
+    document.getElementById('closeLogPanelButton').addEventListener('click', () => {
+        vscode.postMessage({ command: 'closePanel' });
+    });
+
+    showSelectedRevisionButtons();
 })();

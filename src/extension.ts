@@ -532,7 +532,7 @@ async function viewSvnLog(fsPath: string): Promise<void> {
     }
     
     // 打开SVN日志面板
-    await SvnLogPanel.createOrShow(vscode.Uri.file(__dirname), fsPath, svnService);
+    await SvnLogPanel.createOrShow(vscode.Uri.file(__dirname), fsPath, svnService, extensionContext);
   } catch (error: any) {
     vscode.window.showErrorMessage(`查看SVN日志失败: ${error.message}`);
   }
