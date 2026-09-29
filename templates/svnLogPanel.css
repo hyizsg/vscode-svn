@@ -480,15 +480,23 @@ body.box-selecting .log-entry {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: rgba(0, 0, 0, 0.5);
     justify-content: center;
     align-items: center;
+    pointer-events: none;
     z-index: 999;
 }
 
-.loading-text {
-    color: white;
-    font-size: 1.2em;
+.loading-spinner {
+    width: 28px;
+    height: 28px;
+    border: 3px solid var(--vscode-panel-border);
+    border-top-color: var(--vscode-progressBar-background);
+    border-radius: 50%;
+    animation: loading-spin 0.8s linear infinite;
+}
+
+@keyframes loading-spin {
+    to { transform: rotate(360deg); }
 }
 
 .merge-output-section {
