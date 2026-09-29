@@ -578,6 +578,7 @@ export class SvnLogPanel {
         if (this._logEntries.length > 0 && !this._selectedRevision && !isLoadingMore) {
             initialRevision = this._logEntries[0].revision;
             this._selectedRevision = initialRevision;
+            this._selectedRevisions = new Set([initialRevision]);
         }
 
         const isDirectory = fs.lstatSync(this._targetPath).isDirectory();

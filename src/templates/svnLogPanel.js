@@ -406,6 +406,9 @@
 
                 selectedRevision = message.selectedRevision || null;
                 selectedRevisions = new Set((message.selectedRevisions || []).map(String));
+                if (selectedRevisions.size === 1 && selectedRevision) {
+                    lastClickedRevision = String(selectedRevision);
+                }
                 renderLogList(getVisibleLogEntries(), message.isLoadingMore, currentHasMoreLogs);
                 if (selectedRevisions.size > 1) {
                     renderRevisionDetails(aggregateSelectedDetails());
@@ -609,15 +612,27 @@
                 renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
             });
 
-            entryElement.addEventListener('click', () => {
+            entryElement.addEventListener('click', event => {
                 if (suppressNextRowClick) {
                     suppressNextRowClick = false;
                     return;
                 }
                 selectedRevision = revision;
-                selectedRevisions = new Set([revision]);
+                if (event.shiftKey && lastClickedRevision && lastClickedRevision !== revision) {
+                    applyShiftRange(lastClickedRevision, revision, true);
+                    debugLog('区间选择修订版本: ' + lastClickedRevision + ' - ' + revision);
+                } else if (event.ctrlKey || event.metaKey) {
+                    if (selectedRevisions.has(revision)) {
+                        selectedRevisions.delete(revision);
+                    } else {
+                        selectedRevisions.add(revision);
+                    }
+                    debugLog('切换选择修订版本: ' + revision);
+                } else {
+                    selectedRevisions = new Set([revision]);
+                    debugLog('单选修订版本: ' + revision);
+                }
                 lastClickedRevision = revision;
-                debugLog('单选修订版本: ' + revision);
                 syncSelectedRevisions(revision);
                 renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
             });
