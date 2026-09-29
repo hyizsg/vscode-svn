@@ -894,7 +894,7 @@ export class SvnLogPanel {
 
         const cacheMap = this.context.globalState.get<MergeStatusCacheMap>(STATE_KEY_MERGE_STATUS, {});
         const cached = cacheMap[this._mergeStatusCacheKey(sourcePath, targetPath)];
-        if (!cached || cached.startRevision > revisionRange.start || cached.endRevision < revisionRange.end) {
+        if (!cached) {
             this._mergedRevisions.clear();
             void this._panel.webview.postMessage({ command: 'mergeRevisionStatus', mergedRevisions: [] });
             return;
