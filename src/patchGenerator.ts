@@ -91,17 +91,13 @@ export class PatchGenerator {
                 throw new Error('该日志没有可生成 patch 的 Lua 代码或配置表修改');
             }
 
-            let content = codePatch || `require("patch_always")\n\n${configPatch.trim()}\n`;
-            content = this.stripCodeFence(content).trim();
-            if (!content.startsWith('require("patch_always")')) {
-                content = `require("patch_always")\n\n${content}`;
-            }
-            content += '\n';
+            const body = codePatch || configPatch;
+            const block = this.formatPatchBlock(body, entry);
             const patchFile = path.join(projectDev, 'src', 'patch.lua');
-            await this.validateAndWrite(content, patchFile);
+            await this.validateAndAppend(block, patchFile);
             const document = await vscode.workspace.openTextDocument(patchFile);
             await vscode.window.showTextDocument(document, { preview: false });
-            vscode.window.showInformationMessage(`已根据 r${revision} 生成 patch.lua`);
+            vscode.window.showInformationMessage(`已将 r${revision} patch 追加到 patch.lua`);
         });
     }
 
@@ -281,7 +277,7 @@ export class PatchGenerator {
             if (!fs.existsSync(outputFile)) {
                 throw new Error(`${generatorName} 未生成 ${outputName}`);
             }
-            return fs.readFileSync(outputFile, 'utf8').trim();
+            return this.stripBoundaryMetadata(fs.readFileSync(outputFile, 'utf8'));
         } finally {
             fs.rmSync(tempDir, { recursive: true, force: true });
         }
@@ -328,16 +324,16 @@ export class PatchGenerator {
         const prompt = `请根据单个 SVN 日志生成 Lua 热更新 patch。\n\n` +
             `版本: r${revision}\n作者: ${entry.author}\n提交信息: ${entry.message}\n\n` +
             `强制规则：\n` +
-            `1. 严格参考现有 patch.lua 格式：第一行必须是 require("patch_always")，下一段直接进入模块 patch，不生成版本、作者、变更说明、start/end 或分隔线等头尾说明。\n` +
+            `1. 只输出本次 revision 的 patch 正文，不输出 require("patch_always")，不生成版本、作者、变更说明、start/end 或分隔线；扩展会统一追加头尾注释。\n` +
             `2. 每个模块代码前只写一行“-- require路径”，随后定义 local 模块变量和完整替换函数，例如“-- app.views.xxx”下一行“local Xxx = require("app.views.xxx")”。\n` +
-            `3. 文件末尾严格使用“-- QA测试用例：”标题，后续每条使用“-- 1. ...；”格式，不添加其他尾部说明。\n` +
-            `4. 每次生成独立完整文件，不保留历史 patch。\n` +
+            `3. 正文末尾严格使用“-- QA测试用例：”标题，后续每条使用“-- 1. ...；”格式，不添加其他尾部说明。\n` +
+            `4. 只处理本次 revision，不包含已有 patch.lua 内容。\n` +
             `5. 必须使用变更材料中给出的 require 路径。\n` +
             `6. 必须重定义受影响的完整公开函数，保持冒号/点号和参数完全一致。\n` +
             `7. 原文件顶层 local/upvalue 在 patch 中不可见，必须重新 require 或重新声明。\n` +
             `8. local function 不能直接替换，需内联到公开调用者。\n` +
             `9. EMAP/TMAP/AMAP 保存旧函数引用时，重定义后必须同步重绑。\n` +
-            (configPatch ? `10. 以下配置表 patch 必须原样包含在代码中：\n${configPatch}\n\n` : '') +
+            (configPatch ? `10. 以下配置表 patch 必须原样包含在正文中：\n${configPatch}\n\n` : '') +
             `变更材料：\n${sections.join('\n\n====================\n\n')}`;
 
         const result = await this.aiService.generateText(prompt, instruction, `正在生成 r${revision} Lua patch...`);
@@ -362,7 +358,44 @@ export class PatchGenerator {
             .replace(/\s*```\s*$/i, '');
     }
 
-    private async validateAndWrite(content: string, patchFile: string): Promise<void> {
+    private stripBoundaryMetadata(content: string): string {
+        const lines = content.trim().split(/\r?\n/);
+        if (lines[0]?.trim() === '--[[') {
+            const closing = lines.findIndex((line, index) => index > 0 && line.trim() === ']]');
+            if (closing > 0 && lines.slice(1, closing).some(line => line.trim() === 'start')) {
+                lines.splice(0, closing + 1);
+            }
+        }
+
+        let opening = -1;
+        for (let index = lines.length - 1; index >= 0; index--) {
+            if (lines[index].trim() === '--[[') {
+                opening = index;
+                break;
+            }
+        }
+        if (opening >= 0 && lines.slice(opening + 1).some(line => line.trim() === 'end')) {
+            lines.splice(opening);
+        }
+        return lines.join('\n').trim();
+    }
+
+    private formatPatchBlock(content: string, entry: PatchLogEntry): string {
+        let body = this.stripCodeFence(content).trim();
+        body = body.replace(/^require\s*\(\s*["']patch_always["']\s*\)\s*;?\s*/i, '');
+        body = this.stripBoundaryMetadata(body);
+
+        const message = (entry.message.trim() || `r${entry.revision}`).replace(/\]\]/g, '] ]');
+        const author = (entry.author.trim() || os.userInfo().username).replace(/[\r\n]+/g, ' ').replace(/\]\]/g, '] ]');
+        const start = `--[[\n${message}\nby ${author}\nstart\n]]`;
+        const end = `--[[\n${message}\nby ${author}\nend\n]]`;
+        return `${start}\n\n${body}\n\n${end}`;
+    }
+
+    private async validateAndAppend(block: string, patchFile: string): Promise<void> {
+        const existing = fs.existsSync(patchFile) ? fs.readFileSync(patchFile, 'utf8').trimEnd() : '';
+        const prefix = existing || 'require("patch_always")';
+        const content = `${prefix}\n\n${block.trim()}\n`;
         const tempFile = path.join(os.tmpdir(), `vscode-svn-patch-${Date.now()}.lua`);
         fs.writeFileSync(tempFile, content, 'utf8');
         try {
