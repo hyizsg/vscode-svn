@@ -705,6 +705,9 @@ export class SvnUpdatePanel {
               case 'updateComplete':
                 updateButton.disabled = false;
                 updateButton.textContent = '重新更新';
+                if (msg.success) {
+                  commitButton.style.display = '';
+                }
                 break;
               case 'conflictsUpdated':
                 setBatchDisabled(false);
