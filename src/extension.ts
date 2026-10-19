@@ -420,9 +420,15 @@ async function revertFile(filePath: string): Promise<void> {
 
     // 获取文件状态
     const status = await svnService.getFileStatus(filePath);
-    
-    // 如果文件未修改，提示用户
-    if (status === '正常') {
+
+    // 编辑区右键恢复时，未保存的修改只存在于编辑器缓冲区，svn status 可能为“无修改”
+    const openDoc = vscode.workspace.textDocuments.find(
+      (d) => d.uri.scheme === 'file' && d.uri.fsPath === filePath
+    );
+
+    // 如果文件未修改（磁盘与编辑器均无改动），提示用户
+    // 注意 parseStatusCode 对无改动的返回值是“无修改”，不是“正常”
+    if (status === '无修改' && !openDoc?.isDirty) {
       vscode.window.showInformationMessage('文件未修改，无需恢复');
       return;
     }
@@ -440,6 +446,24 @@ async function revertFile(filePath: string): Promise<void> {
 
     // 恢复文件
     await svnService.revertFile(filePath);
+
+    // svn 只还原磁盘文件；若编辑器中还有未保存的脏缓冲，需用还原后的磁盘内容刷新，
+    // 否则编辑器仍显示修改内容（保存后修改还会回来），看起来像 revert 失败
+    if (openDoc && openDoc.isDirty) {
+      const content = await vscode.workspace.fs.readFile(openDoc.uri);
+      const text = Buffer.from(content).toString('utf8');
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(
+        openDoc.uri,
+        new vscode.Range(
+          new vscode.Position(0, 0),
+          openDoc.lineAt(openDoc.lineCount - 1).range.end
+        ),
+        text
+      );
+      await vscode.workspace.applyEdit(edit);
+    }
+
     vscode.window.showInformationMessage('文件已成功恢复到版本库状态');
   } catch (error: any) {
     vscode.window.showErrorMessage(`SVN操作失败: ${error.message}`);
@@ -2734,7 +2758,20 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.window.showErrorMessage('只能恢复本地文件夹');
       return;
     }
-    
+
+    // 编辑区右键可能把文件路径传给目录命令（子菜单 when 残留资源管理器上下文时会出现），
+    // 此时按单文件恢复分发，避免把文件路径当 cwd 执行 revert -R "." 报 ENOTDIR
+    let stat: fs.Stats | undefined;
+    try {
+      stat = fs.statSync(folderUri.fsPath);
+    } catch {
+      // 路径不可访问时沿用目录流程，由后续检查给出错误提示
+    }
+    if (stat && stat.isFile()) {
+      await revertFile(folderUri.fsPath);
+      return;
+    }
+
     await revertFolder(folderUri.fsPath);
   });
   

@@ -2,7 +2,7 @@
   "name": "vscode-svn-ai",
   "displayName": "VSCode SVN - AI智能版本控制",
   "description": "🚀 全平台SVN智能插件：基于原生命令行工具，支持Windows/macOS/Linux，内置AI提交日志生成，可视化差异对比，100%开源透明。无需TortoiseSVN，轻量级高性能！",
-  "version": "4.12.58",
+  "version": "4.12.59",
   "publisher": "pengfeiSummer",
   "icon": "resources/icon.png",
   "engines": {
@@ -550,6 +550,10 @@
         "label": "VSCode SVN"
       },
       {
+        "id": "vscode-svn.submenu.editor",
+        "label": "VSCode SVN"
+      },
+      {
         "id": "vscode-svn.viewTitleSubmenu",
         "label": "VSCode SVN"
       }
@@ -624,7 +628,7 @@
           "group": "2_svn@2"
         },
         {
-          "submenu": "vscode-svn.submenu",
+          "submenu": "vscode-svn.submenu.editor",
           "when": "resourceScheme == file",
           "group": "2_svn@3"
         }
@@ -1029,6 +1033,208 @@
           "command": "vscode-svn.manageExternals.zh",
           "when": "(explorerResourceIsFolder || explorerResourceIsRoot) && config.vscode-svn.language == 'zh'",
           "group": "3_rev@5"
+        }
+      ],
+      "vscode-svn.submenu.editor": [
+        {
+          "command": "vscode-svn.diff",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "1_main@1"
+        },
+        {
+          "command": "vscode-svn.viewLog",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "1_main@2"
+        },
+        {
+          "command": "vscode-svn.resolveFile",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "1_main@3"
+        },
+        {
+          "command": "vscode-svn.svnDelete",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "1_main@4"
+        },
+        {
+          "command": "vscode-svn.revertFile",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "1_main@5"
+        },
+        {
+          "command": "vscode-svn.blame",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "1_main@6"
+        },
+        {
+          "command": "vscode-svn.lockFile",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "1_main@7"
+        },
+        {
+          "command": "vscode-svn.unlockFile",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "1_main@8"
+        },
+        {
+          "command": "vscode-svn.export",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "2_extra@1"
+        },
+        {
+          "command": "vscode-svn.copyPath",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "2_extra@2"
+        },
+        {
+          "command": "vscode-svn.movePath",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "2_extra@3"
+        },
+        {
+          "command": "vscode-svn.createPatch",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "2_extra@4"
+        },
+        {
+          "command": "vscode-svn.manageProperties",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "2_extra@5"
+        },
+        {
+          "command": "vscode-svn.addIgnore",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "2_extra@6"
+        },
+        {
+          "command": "vscode-svn.diffWithRevision",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "3_rev@1"
+        },
+        {
+          "command": "vscode-svn.catFile",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "3_rev@2"
+        },
+        {
+          "command": "vscode-svn.updateToRevision",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "3_rev@3"
+        },
+        {
+          "command": "vscode-svn.copyUrl",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "3_rev@4"
+        },
+        {
+          "command": "vscode-svn.removeIgnore",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "3_rev@5"
+        },
+        {
+          "command": "vscode-svn.quickSetProps",
+          "when": "resourceScheme == file && config.vscode-svn.language != 'zh'",
+          "group": "3_rev@6"
+        },
+        {
+          "command": "vscode-svn.diff.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "1_main@1"
+        },
+        {
+          "command": "vscode-svn.viewLog.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "1_main@2"
+        },
+        {
+          "command": "vscode-svn.resolveFile.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "1_main@3"
+        },
+        {
+          "command": "vscode-svn.svnDelete.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "1_main@4"
+        },
+        {
+          "command": "vscode-svn.revertFile.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "1_main@5"
+        },
+        {
+          "command": "vscode-svn.blame.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "1_main@6"
+        },
+        {
+          "command": "vscode-svn.lockFile.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "1_main@7"
+        },
+        {
+          "command": "vscode-svn.unlockFile.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "1_main@8"
+        },
+        {
+          "command": "vscode-svn.export.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "2_extra@1"
+        },
+        {
+          "command": "vscode-svn.copyPath.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "2_extra@2"
+        },
+        {
+          "command": "vscode-svn.movePath.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "2_extra@3"
+        },
+        {
+          "command": "vscode-svn.createPatch.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "2_extra@4"
+        },
+        {
+          "command": "vscode-svn.manageProperties.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "2_extra@5"
+        },
+        {
+          "command": "vscode-svn.addIgnore.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "2_extra@6"
+        },
+        {
+          "command": "vscode-svn.diffWithRevision.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "3_rev@1"
+        },
+        {
+          "command": "vscode-svn.catFile.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "3_rev@2"
+        },
+        {
+          "command": "vscode-svn.updateToRevision.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "3_rev@3"
+        },
+        {
+          "command": "vscode-svn.copyUrl.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "3_rev@4"
+        },
+        {
+          "command": "vscode-svn.removeIgnore.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "3_rev@5"
+        },
+        {
+          "command": "vscode-svn.quickSetProps.zh",
+          "when": "resourceScheme == file && config.vscode-svn.language == 'zh'",
+          "group": "3_rev@6"
         }
       ],
       "view/title": [
