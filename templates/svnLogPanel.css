@@ -246,6 +246,32 @@ body {
     font-size: 0.85em;
 }
 
+.branch-point-divider {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 6px 0;
+    padding: 0 4px;
+    font-size: 0.8em;
+    color: var(--vscode-textLink-foreground, #4ec9b0);
+    user-select: none;
+}
+
+.branch-point-divider .branch-point-line {
+    flex: 1 1 auto;
+    height: 0;
+    border-top: 1px dashed currentColor;
+    opacity: 0.7;
+}
+
+.branch-point-divider .branch-point-label {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .revision-badge {
     display: inline-block;
     margin: 2px 0 0 4px;

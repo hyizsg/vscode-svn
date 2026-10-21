@@ -11,11 +11,20 @@ import { PatchGenerator } from './patchGenerator';
 
 const STATE_KEY_MERGE_TARGET = 'mergeToBranch.lastTargetPath';
 const STATE_KEY_MERGE_STATUS = 'mergeToBranch.mergedStatusByPath';
+const STATE_KEY_BRANCH_POINT = 'mergeToBranch.branchPointByPath';
 
 interface MergeRevisionRange {
     start: number;
     end: number;
 }
+
+interface BranchPointCache {
+    targetUrl: string;
+    copyFromPath: string;
+    copyFromRevision: number;
+}
+
+type BranchPointCacheMap = Record<string, BranchPointCache>;
 
 interface MergeStatusCache {
     startRevision: number;
@@ -951,6 +960,7 @@ export class SvnLogPanel {
         if (!targetPath) {
             if (this._targetPath === sourcePath && !this._mergeTargetPath) {
                 void this._panel.webview.postMessage({ command: 'mergeTargetInfo', info: null });
+                void this._panel.webview.postMessage({ command: 'branchPointInfo', info: null });
             }
             return undefined;
         }
@@ -971,15 +981,67 @@ export class SvnLogPanel {
                     branchName: this._shortBranchName(targetUrl)
                 }
             });
+            void this._postBranchPointInfo(sourcePath, targetPath, sourceUrl, targetUrl);
             return this._mapMergeSourceUrl(sourceUrl, targetUrl);
         } catch {
             if (this._targetPath === sourcePath && this._mergeTargetPath === targetPath) {
                 this._mergeTargetPath = undefined;
                 this._mergedRevisions.clear();
                 void this._panel.webview.postMessage({ command: 'mergeTargetInfo', info: null });
+                void this._panel.webview.postMessage({ command: 'branchPointInfo', info: null });
                 void this._panel.webview.postMessage({ command: 'mergeRevisionStatus', mergedRevisions: [] });
             }
             return undefined;
+        }
+    }
+
+    private async _postBranchPointInfo(
+        sourcePath: string,
+        targetPath: string,
+        sourceUrl: string,
+        targetUrl: string
+    ): Promise<void> {
+        const isStale = () => this._targetPath !== sourcePath || this._mergeTargetPath !== targetPath;
+        const postNone = () => {
+            if (!isStale()) {
+                void this._panel.webview.postMessage({ command: 'branchPointInfo', info: null });
+            }
+        };
+
+        try {
+            const cacheMap = this.context.globalState.get<BranchPointCacheMap>(STATE_KEY_BRANCH_POINT, {});
+            let cached = cacheMap[targetPath];
+            if (!cached || cached.targetUrl !== targetUrl) {
+                const copyPoint = await this.svnService.getBranchCopyPoint(targetPath, targetUrl);
+                if (isStale()) { return; }
+                if (!copyPoint) { postNone(); return; }
+                cached = {
+                    targetUrl,
+                    copyFromPath: copyPoint.copyFromPath,
+                    copyFromRevision: copyPoint.copyFromRevision
+                };
+                cacheMap[targetPath] = cached;
+                await this.context.globalState.update(STATE_KEY_BRANCH_POINT, cacheMap);
+            }
+
+            if (isStale()) { return; }
+            const sourceBranch = this._shortBranchName(sourceUrl);
+            if (!sourceBranch || this._shortBranchName(cached.copyFromPath) !== sourceBranch) {
+                postNone();
+                return;
+            }
+
+            void this._panel.webview.postMessage({
+                command: 'branchPointInfo',
+                info: {
+                    revision: cached.copyFromRevision,
+                    dirName: path.basename(targetPath),
+                    branchName: this._shortBranchName(targetUrl)
+                }
+            });
+        } catch (error: any) {
+            this._log(`检测分支拉取点失败: ${error.message}`);
+            postNone();
         }
     }
 

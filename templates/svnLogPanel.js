@@ -310,6 +310,7 @@
         'generatePatchButton', 'cancelMergeButton', 'closeLogPanelButton'
     ];
     let mergeTargetInfo = null;
+    let branchPointInfo = null;
     let mergeRunning = false;
 
     function setFooterButtons(visibleIds) {
@@ -477,6 +478,11 @@
                 mergeTargetInfo = message.info || null;
                 renderMergeTargetButton();
                 break;
+            case 'branchPointInfo':
+                branchPointInfo = message.info || null;
+                debugLog('分支拉取点: ' + (branchPointInfo ? 'r' + branchPointInfo.revision : '无'));
+                renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
+                break;
             case 'mergeRevisionStatus':
                 mergedRevisions = new Set((message.mergedRevisions || []).map(Number));
                 renderLogList(getVisibleLogEntries(), false, currentHasMoreLogs);
@@ -571,10 +577,23 @@
         selectAll.disabled = false;
 
         const allVisibleSelected = entries.every(entry => selectedRevisions.has(String(entry.revision)));
+        const branchPointRevision = branchPointInfo ? Number(branchPointInfo.revision) : 0;
+        let branchPointRendered = !branchPointRevision;
         let html = '';
 
         entries.forEach(entry => {
             const revision = String(entry.revision);
+            if (!branchPointRendered && Number(revision) <= branchPointRevision) {
+                branchPointRendered = true;
+                const branchLabel = branchPointInfo.branchName || branchPointInfo.dirName || '目标分支';
+                const dividerText = branchLabel + ' 拉取点 r' + branchPointRevision;
+                const dividerTitle = branchLabel + ' 于 r' + branchPointRevision + ' 从当前目录拉出，以下版本已包含在该分支中';
+                html += '<div class="branch-point-divider" title="' + escapeHtml(dividerTitle) + '">' +
+                    '<span class="branch-point-line"></span>' +
+                    '<span class="branch-point-label">' + escapeHtml(dividerText) + '</span>' +
+                    '<span class="branch-point-line"></span>' +
+                    '</div>';
+            }
             const isActive = revision === selectedRevision;
             const isChecked = selectedRevisions.has(revision);
             const isNewerThanLocal = entry.isNewerThanLocal;

@@ -3204,6 +3204,35 @@ export class SvnService {
     }
   }
 
+  /**
+   * 获取分支的拉取点（该分支从哪个路径的哪个版本复制出来）
+   */
+  public async getBranchCopyPoint(
+    workingDir: string,
+    branchUrl: string
+  ): Promise<{ revision: number; copyFromPath: string; copyFromRevision: number } | undefined> {
+    try {
+      const result = await this.executeSvnCommand(
+        `log --xml -v --stop-on-copy -r 1:HEAD -l 1 "${branchUrl}"`, workingDir
+      );
+      const revisionMatch = result.match(/<logentry[^>]*revision="(\d+)"/);
+      if (!revisionMatch) { return undefined; }
+      const copiedTag = (result.match(/<path\s[^>]*>/g) || []).find(tag => tag.includes('copyfrom-path='));
+      if (!copiedTag) { return undefined; }
+      const copyFromPathMatch = copiedTag.match(/copyfrom-path="([^"]*)"/);
+      const copyFromRevisionMatch = copiedTag.match(/copyfrom-rev="(\d+)"/);
+      if (!copyFromPathMatch || !copyFromRevisionMatch) { return undefined; }
+      return {
+        revision: parseInt(revisionMatch[1], 10),
+        copyFromPath: copyFromPathMatch[1],
+        copyFromRevision: parseInt(copyFromRevisionMatch[1], 10)
+      };
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[getBranchCopyPoint] 失败: ${error.message}`);
+      return undefined;
+    }
+  }
+
   // ===================== Export / Import =====================
 
   /**
