@@ -29,13 +29,13 @@
     const startDateFilter = document.getElementById('startDateFilter');
     const endDateFilter = document.getElementById('endDateFilter');
     
-    // 默认设置当前日期为结束日期，三天前为开始日期
+    // 默认设置当前日期为结束日期，一个月前为开始日期
     const today = new Date();
-    const threeDaysAgo = new Date(today);
-    threeDaysAgo.setDate(today.getDate() - 3);
-    
+    const defaultStartDate = new Date(today);
+    defaultStartDate.setMonth(today.getMonth() - 1);
+
     // 格式化为 YYYY-MM-DD
-    startDateFilter.value = threeDaysAgo.toISOString().split('T')[0];
+    startDateFilter.value = defaultStartDate.toISOString().split('T')[0];
     endDateFilter.value = today.toISOString().split('T')[0];
     
     // 存储目标路径信息
@@ -1233,7 +1233,7 @@
         debugLog('清除筛选条件');
         revisionFilter.value = '';
         logFilterInput.value = '';
-        startDateFilter.value = threeDaysAgo.toISOString().split('T')[0];
+        startDateFilter.value = defaultStartDate.toISOString().split('T')[0];
         endDateFilter.value = today.toISOString().split('T')[0];
         filterResult.textContent = '';
         vscode.postMessage({ command: 'refresh' });

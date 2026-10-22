@@ -3160,10 +3160,10 @@ export class SvnLogPanel {
                         commandArgs += ` -r ${dateRangeStr} `;
                     }
                 } else {
-                    // 如果没有指定日期，默认显示最近3天的记录
+                    // 如果没有指定日期，默认显示最近一个月的记录
                     const now = new Date();
                     const threeDaysAgo = new Date(now);
-                    threeDaysAgo.setDate(now.getDate() - 3);
+                    threeDaysAgo.setMonth(now.getMonth() - 1);
                     
                     // 格式化日期，YYYY-MM-DD
                     const startDateStr = `${threeDaysAgo.getFullYear()}-${String(threeDaysAgo.getMonth() + 1).padStart(2, '0')}-${String(threeDaysAgo.getDate()).padStart(2, '0')}`;
