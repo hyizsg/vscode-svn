@@ -478,6 +478,29 @@
                 mergeTargetInfo = message.info || null;
                 renderMergeTargetButton();
                 break;
+            case 'externalsList': {
+                const externalsGroup = document.getElementById('externalsGroup');
+                const externalsSelect = document.getElementById('externalsSelect');
+                if (!externalsGroup || !externalsSelect) { break; }
+                const basePath = message.basePath || targetPath;
+                const baseName = message.basePath ? message.basePath.split('/').pop() : (targetName || '主目录');
+                externalsSelect.innerHTML = '';
+                const mainOption = document.createElement('option');
+                mainOption.value = basePath;
+                mainOption.textContent = baseName;
+                mainOption.title = basePath;
+                externalsSelect.appendChild(mainOption);
+                (message.externals || []).forEach(ext => {
+                    const opt = document.createElement('option');
+                    opt.value = ext.path;
+                    opt.textContent = ext.name;
+                    opt.title = ext.path;
+                    externalsSelect.appendChild(opt);
+                });
+                externalsGroup.style.display = (message.externals || []).length > 0 ? 'flex' : 'none';
+                externalsSelect.value = basePath;
+                break;
+            }
             case 'branchPointInfo':
                 branchPointInfo = message.info || null;
                 debugLog('分支拉取点: ' + (branchPointInfo ? 'r' + branchPointInfo.revision : '无'));
@@ -1203,6 +1226,17 @@
     }
     
     // 筛选按钮点击事件
+    // 外部链接切换：切换日志查看目标
+    const externalsSelect = document.getElementById('externalsSelect');
+    if (externalsSelect) {
+        externalsSelect.addEventListener('change', () => {
+            const picked = externalsSelect.value;
+            if (picked && picked !== targetPath) {
+                vscode.postMessage({ command: 'switchLogTarget', path: picked });
+            }
+        });
+    }
+
     filterButton.addEventListener('click', () => {
         const revision = revisionFilter.value.trim();
         const startDate = startDateFilter.value.trim();

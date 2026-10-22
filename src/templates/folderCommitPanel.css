@@ -213,6 +213,10 @@ body {
 .status-deleted { color: #F14C4C; }
 .status-unversioned { color: #C586C0; }
 .status-conflict { color: #FF0000; font-weight: bold; }
+
+.group-external .changelist-name {
+    color: #4ec9b0;
+}
 .status-missing { color: #FF8800; }
 
 .commit-section { 

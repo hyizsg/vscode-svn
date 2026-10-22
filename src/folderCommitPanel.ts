@@ -14,6 +14,8 @@ interface FileStatus {
     path: string;
     status: string;
     type: 'modified' | 'added' | 'deleted' | 'unversioned' | 'conflict' | 'missing';
+    /** 所属外部链接根路径（主工作副本内文件为空） */
+    externalRoot?: string;
     displayName: string;
     changelist?: string;
     locked?: boolean;
@@ -46,6 +48,8 @@ export class SvnFolderCommitPanel {
 
     /** 本次提交是否被用户取消（用于区分取消与失败的提示） */
     private _commitCancelled = false;
+    // 外部链接根路径（svn status 的 X 行），用于文件分组与分仓库提交
+    private _externalRoots: string[] = [];
     /** 「合并到分支」流程是否被用户取消 */
     private _mergeCancelled = false;
 
@@ -215,13 +219,19 @@ export class SvnFolderCommitPanel {
             // 使用原生格式获取状态
             this.outputChannel.appendLine(`[_updateFileStatuses] 执行SVN status命令（忽略 svn:externals 外部链接）...`);
             // 添加 --ignore-externals 屏蔽 svn:externals 引用的外部目录（issue #19）
-            const statusResult = await this.svnService.executeSvnCommand('status --ignore-externals', this.folderPath, false);
+            // 不带 --ignore-externals：同时扫描外部链接内部的变化（svn 每次提交只能针对一个仓库，提交时按仓库分组）
+            const statusResult = await this.svnService.executeSvnCommand('status', this.folderPath, false);
             console.log('SVN status result:', statusResult);
             this.outputChannel.appendLine(`[_updateFileStatuses] SVN status 原始输出长度: ${statusResult.length} 字符`);
             this.outputChannel.appendLine(`[_updateFileStatuses] SVN status 原始输出:\n${statusResult}`);
 
             // 检测 changelist 块内无修改的文件，自动从 SVN changelist 中移除
             const rawLines = statusResult.split('\n').map(line => line.replace(/[\t\r ]+$/, ''));
+            // 收集外部链接根路径（X 行）：供文件归属分组与分仓库提交使用
+            this._externalRoots = rawLines
+                .filter(line => line.startsWith('X'))
+                .map(line => line.length > 8 ? path.resolve(this.folderPath, line.substring(8)) : '')
+                .filter(Boolean);
             const unmodifiedInChangelist: string[] = [];
             let parseChangelist: string | undefined = undefined;
             for (const line of rawLines) {
@@ -352,6 +362,8 @@ export class SvnFolderCommitPanel {
             
                     // 使用 path.resolve 获取绝对路径
                     const absolutePath = path.resolve(this.folderPath, filePath);
+                    // 归属的外部链接根路径（取包含此文件的最深外部根）
+                    const externalRoot = this._findExternalRoot(absolutePath);
             
                     return {
                         path: absolutePath,
@@ -359,7 +371,8 @@ export class SvnFolderCommitPanel {
                         type,
                         displayName: filePath, // 使用相对路径作为显示名称
                         changelist: currentChangelist,
-                        locked
+                        locked,
+                        externalRoot
                     };
                 })
                 .filter(item => item !== null) as FileStatus[];
@@ -560,7 +573,22 @@ export class SvnFolderCommitPanel {
             // 而改用 svn commit --changelist：--changelist 会提交该 changelist 下的全部文件，
             // 导致用户未勾选的文件也被一并提交（且会绕过过滤器）。
             appendOutput(`正在执行 SVN 提交...\n`);
-            await this.svnService.commitFiles(Array.from(commitTargets), message, this.folderPath);
+            // 外部链接属于不同版本库，svn 一次提交只能针对一个仓库：
+            // 按仓库分组分别提交（同一提交信息），合并到分支等主仓库专属流程只取主组版本号
+            const repoGroups = this._partitionByRepository(Array.from(commitTargets));
+            let mainCommittedRevision: number | undefined;
+            for (const repoGroup of repoGroups) {
+                if (repoGroups.length > 1) {
+                    appendOutput(`\n正在提交 ${repoGroup.label}（${repoGroup.files.length} 个文件）...\n`);
+                }
+                committedRevision = undefined;
+                await this.svnService.commitFiles(repoGroup.files, message, this.folderPath);
+                if (repoGroup.isMain) {
+                    mainCommittedRevision = committedRevision;
+                } else if (committedRevision) {
+                    appendOutput(`外部链接 ${repoGroup.label} 已提交至 r${committedRevision}\n`);
+                }
+            }
 
             // 保存提交日志
             this.logStorage.addLog(message, this.folderPath);
@@ -572,12 +600,12 @@ export class SvnFolderCommitPanel {
             this._currentCommitMessage = '';
 
             appendOutput(`\n提交完成 (${files.length} 个文件)\n`);
-            if (committedRevision) {
-                this._lastCommittedRevision = committedRevision;
+            if (mainCommittedRevision) {
+                this._lastCommittedRevision = mainCommittedRevision;
                 this._lastCommittedMessage = message;
             }
-            webview.postMessage({ command: 'commitFinished', success: true, files, revision: committedRevision });
-            if (committedRevision) {
+            webview.postMessage({ command: 'commitFinished', success: true, files, revision: mainCommittedRevision });
+            if (mainCommittedRevision) {
                 // 先摘除实时输出回调，避免查询分支信息的 svn info 原始 XML 混入提交输出
                 this.svnService.onCommandOutput = undefined;
                 await this._postMergeTargetInfo();
@@ -1445,15 +1473,66 @@ export class SvnFolderCommitPanel {
         `;
     }
 
+    /**
+     * 找到包含此路径的最深外部链接根路径；不在任何外部链接内时返回 undefined
+     */
+    private _findExternalRoot(filePath: string): string | undefined {
+        let deepest: string | undefined;
+        for (const root of this._externalRoots) {
+            const rootWithSep = root.endsWith(path.sep) ? root : root + path.sep;
+            if (filePath === root || filePath.startsWith(rootWithSep)) {
+                if (!deepest || root.length > deepest.length) {
+                    deepest = root;
+                }
+            }
+        }
+        return deepest;
+    }
+
+    /**
+     * 按版本库分组：svn 每次提交只能针对一个仓库，外部链接内的文件必须与主工作副本分开提交
+     */
+    private _partitionByRepository(paths: string[]): Array<{ label: string; files: string[]; isMain: boolean }> {
+        const mainFiles: string[] = [];
+        const byRoot = new Map<string, string[]>();
+        for (const p of paths) {
+            const root = this._findExternalRoot(p);
+            if (!root) {
+                mainFiles.push(p);
+                continue;
+            }
+            if (!byRoot.has(root)) {
+                byRoot.set(root, []);
+            }
+            byRoot.get(root)!.push(p);
+        }
+        const groups: Array<{ label: string; files: string[]; isMain: boolean }> = [];
+        if (mainFiles.length > 0) {
+            groups.push({ label: '主工作副本', files: mainFiles, isMain: true });
+        }
+        for (const [root, files] of byRoot) {
+            const label = path.relative(this.folderPath, root) || root;
+            groups.push({ label: `外部链接 ${label}`, files, isMain: false });
+        }
+        return groups;
+    }
+
     private _renderFileList(files: FileStatus[]): string {
-        // 1. 分离三类文件：有 changelist 的、无 changelist 的版本控制文件、未版本控制文件
+        // 1. 分离四类文件：未版本控制、外部链接、有 changelist 的、其余版本控制文件
         const changelistGroups = new Map<string, FileStatus[]>();
+        const externalGroups = new Map<string, FileStatus[]>();
         const changesFiles: FileStatus[] = [];
         const unversionedFiles: FileStatus[] = [];
 
         files.forEach(file => {
             if (file.type === 'unversioned') {
                 unversionedFiles.push(file);
+            } else if (file.externalRoot) {
+                const key = path.relative(this.folderPath, file.externalRoot) || file.externalRoot;
+                if (!externalGroups.has(key)) {
+                    externalGroups.set(key, []);
+                }
+                externalGroups.get(key)!.push(file);
             } else if (file.changelist) {
                 if (!changelistGroups.has(file.changelist)) {
                     changelistGroups.set(file.changelist, []);
@@ -1480,7 +1559,13 @@ export class SvnFolderCommitPanel {
             html += this._renderGroup('changelist', changelist, groupFiles);
         }
 
-        // 4. 未版本控制文件 → “Unversioned Files” 分组
+        // 4. 外部链接分组（按外部根路径），排在 changelist 之后
+        let extIndex = 0;
+        for (const [externalPath, extFiles] of externalGroups) {
+            html += this._renderGroup('external', `外部链接: ${externalPath}`, extFiles, extIndex++);
+        }
+
+        // 5. 未版本控制文件 → “Unversioned Files” 分组
         if (unversionedFiles.length > 0) {
             html += this._renderGroup('unversioned', 'Unversioned Files', unversionedFiles);
         }
@@ -1488,8 +1573,8 @@ export class SvnFolderCommitPanel {
         return html;
     }
 
-    private _renderGroup(groupType: 'changelist' | 'changes' | 'unversioned', title: string, files: FileStatus[]): string {
-        const groupChangelist = groupType === 'changelist' ? title : (groupType === 'changes' ? '__changes__' : '__unversioned__');
+    private _renderGroup(groupType: 'changelist' | 'changes' | 'unversioned' | 'external', title: string, files: FileStatus[], externalIndex: number = 0): string {
+        const groupChangelist = groupType === 'changelist' ? title : (groupType === 'changes' ? '__changes__' : (groupType === 'external' ? `__external_${externalIndex}__` : '__unversioned__'));
         // 按文件名（basename）排序显示，而非按完整路径排序
         const sortedFiles = [...files].sort((a, b) => {
             const na = path.basename(a.displayName).toLowerCase();
@@ -1508,9 +1593,12 @@ export class SvnFolderCommitPanel {
         } else if (groupType === 'unversioned') {
             icon = '❓';
             cssClass = 'changelist-group group-unversioned';
+        } else if (groupType === 'external') {
+            icon = '🔗';
+            cssClass = 'changelist-group group-external';
         }
 
-        const groupId = groupType === 'changelist' ? `cl-${title}` : groupType;
+        const groupId = groupType === 'changelist' ? `cl-${title}` : (groupType === 'external' ? `ext-${externalIndex}` : groupType);
 
         // changelist 类型在 header 右侧展示删除按钮（样式与 file-item 的 .delete-button 保持一致）
         const deleteBtn = groupType === 'changelist'
@@ -1623,6 +1711,25 @@ export class SvnFolderCommitPanel {
             html += `<label>
                 <input type="checkbox" class="changelist-filter-checkbox" data-group-value="${cl.replace(/"/g, '&quot;')}" checked>
                 ${cl.replace(/</g, '&lt;').replace(/>/g, '&gt;')}(${count})
+            </label>`;
+        }
+
+        // 外部链接分组（与 _renderFileList 的分组保持一致，value 对应文件的 data-changelist）
+        const externalGroups = new Map<string, FileStatus[]>();
+        files.forEach(file => {
+            if (file.type !== 'unversioned' && file.externalRoot) {
+                const key = path.relative(this.folderPath, file.externalRoot) || file.externalRoot;
+                if (!externalGroups.has(key)) {
+                    externalGroups.set(key, []);
+                }
+                externalGroups.get(key)!.push(file);
+            }
+        });
+        let extIndex = 0;
+        for (const [externalPath, extFiles] of externalGroups) {
+            html += `<label>
+                <input type="checkbox" class="changelist-filter-checkbox" data-group-value="__external_${extIndex++}__" checked>
+                ${externalPath.replace(/</g, '&lt;').replace(/>/g, '&gt;')}(${extFiles.length})
             </label>`;
         }
 

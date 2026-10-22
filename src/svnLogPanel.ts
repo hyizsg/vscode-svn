@@ -172,6 +172,8 @@ export class SvnLogPanel {
 
         // 初始加载日志
         this._loadLogs();
+        // 检测外部链接（供切换查看）
+        void this._detectExternals();
     }
 
     /**
@@ -259,6 +261,57 @@ export class SvnLogPanel {
     /**
      * 加载SVN日志
      */
+    /**
+     * 检测目标目录下的外部链接（svn status 的 X 行），发送给 webview 渲染切换下拉
+     */
+    private async _detectExternals(): Promise<void> {
+        try {
+            const result = await this.svnService.executeSvnCommand(
+                `status --ignore-externals "${this._targetPath}"`, path.dirname(this._targetPath), false
+            );
+            const externals: Array<{ path: string; name: string }> = [];
+            for (const raw of result.split('\n')) {
+                const line = raw.replace(/[\t\r ]+$/, '');
+                if (!line.startsWith('X')) { continue; }
+                const externalPath = line.length > 8 ? line.substring(8) : '';
+                if (!externalPath) { continue; }
+                const absolute = path.isAbsolute(externalPath)
+                    ? externalPath
+                    : path.resolve(path.dirname(this._targetPath), externalPath);
+                externals.push({ path: absolute, name: path.basename(absolute) });
+            }
+            this._log(`检测到外部链接 ${externals.length} 个`);
+            void this._panel.webview.postMessage({
+                command: 'externalsList',
+                externals,
+                basePath: this._targetPath
+            });
+        } catch (error: any) {
+            this._log(`检测外部链接失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 切换日志查看目标（主目录 ↔ 外部链接）：重置状态后原地重新加载
+     */
+    private async _switchTarget(newPath: string): Promise<void> {
+        if (!newPath || newPath === this._targetPath) { return; }
+        this._log(`切换日志目标: ${newPath}`);
+        this._targetPath = newPath;
+        this._logEntries = [];
+        this._minLoadedRevision = null;
+        this._isInitialLoad = true;
+        this._localRevision = null;
+        this._currentFilterState = { isFiltered: false, filterType: 'none', filterDescription: '' };
+        this._mergedRevisions.clear();
+        this._mergeTargetPath = undefined;
+        this._panel.title = `SVN日志: ${path.basename(newPath)}`;
+        await this._initializeWebviewContent();
+        this._getSvnRelativePath();
+        void this._detectExternals();
+        this._loadLogs();
+    }
+
     private async _loadLogs(limit: number = 100, isLoadingMore: boolean = false) {
         try {
             // 确定版本范围
@@ -1331,6 +1384,9 @@ export class SvnLogPanel {
                             await this._loadLogs(message.limit || 100, true); // 传入true表示加载更多模式
                         }
                         break;
+                    case 'switchLogTarget':
+                        await this._switchTarget(message.path);
+                        return;
                     case 'refresh':
                         this._log('刷新日志');
                         // 重置最小版本号和初始加载标记
