@@ -190,6 +190,24 @@ body {
     opacity: 1;
 }
 
+.conflict-button {
+    background-color: #FF8800 !important;
+    opacity: 0.8;
+}
+
+.conflict-button:hover {
+    opacity: 1;
+}
+
+.resolve-button {
+    background-color: #73C991 !important;
+    opacity: 0.8;
+}
+
+.resolve-button:hover {
+    opacity: 1;
+}
+
 .status-modified { color: #FFCC00; }
 .status-added { color: #73C991; }
 .status-deleted { color: #F14C4C; }

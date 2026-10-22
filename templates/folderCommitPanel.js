@@ -107,6 +107,8 @@
             const sideBySideButton = item.querySelector('.side-by-side-button');
             const revertButton = item.querySelector('.revert-button');
             const deleteButton = item.querySelector('.delete-button');
+            const conflictButton = item.querySelector('.conflict-button');
+            const resolveButton = item.querySelector('.resolve-button');
             const filePath = item.getAttribute('data-path');
 
             if (checkbox) {
@@ -151,6 +153,20 @@
                 deleteButton.addEventListener('click', (e) => {
                     e.stopPropagation();
                     deleteUnversionedFiles([filePath]);
+                });
+            }
+
+            if (conflictButton) {
+                conflictButton.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    vscode.postMessage({ command: 'openMergeEditor', file: filePath });
+                });
+            }
+
+            if (resolveButton) {
+                resolveButton.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    vscode.postMessage({ command: 'resolveConflict', file: filePath });
                 });
             }
 

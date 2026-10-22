@@ -978,6 +978,12 @@ export class SvnFolderCommitPanel {
                     case 'revertFiles':
                         await this._revertFiles(message.files || []);
                         return;
+                    case 'openMergeEditor':
+                        await this._openConflictMergeEditor(message.file);
+                        return;
+                    case 'resolveConflict':
+                        await this._resolveConflictFile(message.file);
+                        return;
                     case 'deleteUnversionedFiles':
                         await this._deleteUnversionedFiles(message.files);
                         return;
@@ -1576,6 +1582,10 @@ export class SvnFolderCommitPanel {
                         <button class="diff-button" title="查看内联差异">差异</button>
                         <button class="side-by-side-button" title="${file.type === 'modified' ? '查看左右对比' : '打开文件'}">${file.type === 'modified' ? '对比' : '打开'}</button>
                     ` : ''}
+                    ${file.type === 'conflict' ? `
+                        <button class="conflict-button" title="打开三向合并编辑器手动修改冲突">编辑冲突</button>
+                        <button class="resolve-button" title="将当前工作副本（已去除冲突标记）标记为已解决">标记已解决</button>
+                    ` : ''}
                     ${showRevertButton ? `
                         <button class="revert-button" title="恢复文件修改">恢复</button>
                     ` : ''}
@@ -1823,6 +1833,83 @@ export class SvnFolderCommitPanel {
                 }
             }
             this.outputChannel.appendLine(`[_batchRemoveFiles] ✅ 逐个删除完成: ${files.length} 个文件`);
+        }
+    }
+
+    /**
+     * 打开冲突文件的三向合并编辑器（参考合并面板流程）：
+     * base/mine/theirs 临时文件齐全时用 VS Code Merge Editor，不可用则回退双窗对比+手动编辑，
+     * 临时文件不齐则直接打开文件手动去除冲突标记，处理后点“标记已解决”
+     */
+    private async _openConflictMergeEditor(filePath: string): Promise<void> {
+        try {
+            const files = await this.svnService.getMergeConflictFiles(filePath);
+            const baseUri = files.base ? vscode.Uri.file(files.base) : undefined;
+            const mineUri = files.mine ? vscode.Uri.file(files.mine) : undefined;
+            const theirsUri = files.theirs ? vscode.Uri.file(files.theirs) : undefined;
+            const outputUri = vscode.Uri.file(filePath);
+
+            if (baseUri && mineUri && theirsUri) {
+                try {
+                    // _open.mergeEditor 为内部命令，VS Code 1.69+ 可用
+                    await vscode.commands.executeCommand('_open.mergeEditor', {
+                        base: baseUri,
+                        input1: { uri: mineUri, title: '本地（Mine）', description: '工作副本修改' },
+                        input2: { uri: theirsUri, title: '合并方（Theirs）', description: '即将合入的版本' },
+                        output: outputUri
+                    });
+                    vscode.window.showInformationMessage(
+                        `已打开三向合并编辑器: ${path.basename(filePath)}。编辑完成后请保存输出文件，然后点“标记已解决”即可。`
+                    );
+                    return;
+                } catch (mergeErr: any) {
+                    // Merge Editor 不可用：回退双窗口 diff + 打开主文件
+                    try {
+                        await vscode.commands.executeCommand(
+                            'vscode.diff',
+                            mineUri,
+                            theirsUri,
+                            `${path.basename(filePath)}: 本地 ↔ 合并方`,
+                            { preview: false }
+                        );
+                        const doc = await vscode.workspace.openTextDocument(outputUri);
+                        await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Beside });
+                        vscode.window.showWarningMessage(
+                            `Merge Editor 不可用，已回退为双窗对比 + 手动编辑。原因: ${mergeErr.message || mergeErr}`
+                        );
+                        return;
+                    } catch (diffErr: any) {
+                        vscode.window.showErrorMessage(`打开三向合并失败: ${diffErr.message}`);
+                        return;
+                    }
+                }
+            }
+
+            // 临时文件不齐：退回手动编辑模式
+            const doc = await vscode.workspace.openTextDocument(outputUri);
+            await vscode.window.showTextDocument(doc, { preview: false });
+            vscode.window.showWarningMessage(
+                `未找全 base/mine/theirs 临时文件（可能为非文本冲突或临时文件已被清理），已退回为单文件编辑模式。请去除冲突标记后点“标记已解决”。`
+            );
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`打开三向合并失败: ${error.message}`);
+        }
+    }
+
+    /**
+     * 标记冲突文件为已解决（--accept working），完成后刷新文件列表
+     */
+    private async _resolveConflictFile(filePath: string): Promise<void> {
+        try {
+            await this.svnService.resolveMergeConflict(filePath, 'working');
+            this.outputChannel.appendLine(`[resolveConflict] 已标记为已解决: ${filePath}`);
+            vscode.window.showInformationMessage(`已标记为已解决: ${path.basename(filePath)}`);
+
+            await this._updateFileStatuses();
+            this._panel.webview.html = await this._getHtmlForWebview();
+        } catch (error: any) {
+            this.outputChannel.appendLine(`[resolveConflict] 标记已解决失败: ${error.message}`);
+            vscode.window.showErrorMessage(`标记已解决失败: ${error.message}`);
         }
     }
 
