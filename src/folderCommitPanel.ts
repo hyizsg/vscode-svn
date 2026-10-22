@@ -235,7 +235,9 @@ export class SvnFolderCommitPanel {
                 // （首列空 + 第二列 M 表示仅属性修改，merge 后的 mergeinfo 改动）
                 const col0Blank = (line[0] === ' ' || line[0] === '\t');
                 const col1Blank = (line[1] === undefined || line[1] === ' ' || line[1] === '\t');
-                if (parseChangelist && col0Blank && col1Blank) {
+                // 第 7 列非空白（树冲突 'C'）不是无修改文件，不能当清理对象
+                const col6Blank = (line[6] === undefined || line[6] === ' ' || line[6] === '\t');
+                if (parseChangelist && col0Blank && col1Blank && col6Blank) {
                     const filePath = line.trim();
                     if (filePath) {
                         const absolutePath = path.resolve(this.folderPath, filePath);
@@ -263,6 +265,9 @@ export class SvnFolderCommitPanel {
                 .map(line => line.replace(/[\t\r ]+$/, ''))
                 .filter(line => {
                     if (!line.trim()) return false;
+                    // 过滤非状态行：状态行前 8 列（7 个状态列+分隔空格）只含状态字符，
+                    // 树冲突时 svn 会在末尾追加“冲突概况:”/“  树冲突:1”等摘要行，不能当文件
+                    if (!/^[ A-Z+*!~?]{8}/.test(line)) return false;
                     // 过滤树冲突的详细信息行（可能有前导空格）
                     if (/^\s*>/.test(line)) return false;
                     // 过滤 svn:externals 提示行（issue #19）
@@ -300,10 +305,14 @@ export class SvnFolderCommitPanel {
                     // 仅属性修改场景：首列空格 + 第二列 'M'（常见于 svn merge 后的目录 mergeinfo 改动）
                     // 这种情况应识别为 modified
                     const effectiveStatus = (status === ' ' && line[1] === 'M') ? 'M' : status;
-                    // 跳过前面所有状态标志列和空格，提取真正的文件路径
-                    // 匹配模式：第1个字符(状态) + 任意数量的空格/标志字符(+、空格等) + 文件路径
-                    const match = line.match(/^.[ A-Z+*!~]* {2,}(.+)$/);
-                    const filePath = match ? match[1] : line.replace(/^.\s+/, '').trim();
+                    // 提取真正的文件路径：svn status 固定 7 个状态列 + 1 个分隔空格，
+                    // 路径恒从第 9 列（index 8）开始。不能用“状态+空白”宽松提取：
+                    // 树冲突行第 7 列为 'C' 且后跟单个空格（如 "M      C path"），
+                    // 宽松提取会把冲突列的 'C' 混进路径（"C path"），后续 revert 报 E155010
+                    const filePath = line.length > 8 ? line.substring(8) : '';
+                    if (!filePath) {
+                        return null;
+                    }
                     console.log('Processing line:', { status, filePath, changelist: currentChangelist });
                     this.outputChannel.appendLine(`[_updateFileStatuses] 处理行: "${line}" -> 状态: "${status}", 文件路径: "${filePath}", changelist: "${currentChangelist || ''}"`);
             
