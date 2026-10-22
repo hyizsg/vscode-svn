@@ -266,8 +266,9 @@ export class SvnFolderCommitPanel {
                 .filter(line => {
                     if (!line.trim()) return false;
                     // 过滤非状态行：状态行前 8 列（7 个状态列+分隔空格）只含状态字符，
-                    // 树冲突时 svn 会在末尾追加“冲突概况:”/“  树冲突:1”等摘要行，不能当文件
-                    if (!/^[ A-Z+*!~?]{8}/.test(line)) return false;
+                    // 树冲突时 svn 会在末尾追加“冲突概况:”/“  树冲突:1”等摘要行，不能当文件；
+                    // changelist 头行（--- Changelist 'xxx':）不是状态行但需保留给后续解析
+                    if (!/^---\s+Changelist\s/.test(line) && !/^[ A-Z+*!~?]{8}/.test(line)) return false;
                     // 过滤树冲突的详细信息行（可能有前导空格）
                     if (/^\s*>/.test(line)) return false;
                     // 过滤 svn:externals 提示行（issue #19）
