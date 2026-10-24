@@ -9,6 +9,14 @@
     const generatePatchButton = document.getElementById('generatePatchButton');
     const mergeOutputSection = document.getElementById('mergeOutputSection');
     const mergeOutput = document.getElementById('mergeOutput');
+    const mergeConflictsSection = document.getElementById('mergeConflictsSection');
+    const mergeConflictCount = document.getElementById('mergeConflictCount');
+    const mergeConflictList = document.getElementById('mergeConflictList');
+    const mergeResolveProgress = document.getElementById('mergeResolveProgress');
+    const mergeResolveAllMineBtn = document.getElementById('mergeResolveAllMineBtn');
+    const mergeResolveAllTheirsBtn = document.getElementById('mergeResolveAllTheirsBtn');
+    const mergeResolveAllWorkingBtn = document.getElementById('mergeResolveAllWorkingBtn');
+    const mergeRefreshConflictsBtn = document.getElementById('mergeRefreshConflictsBtn');
     const localRevisionInfo = document.getElementById('localRevisionInfo');
     const localRevisionNumber = document.getElementById('localRevisionNumber');
     
@@ -369,6 +377,71 @@
         mergeOutput.scrollTop = mergeOutput.scrollHeight;
     }
 
+    function mcTypeLabel(t) {
+        return t === 'tree' ? '树冲突' : t === 'property' ? '属性冲突' : '文本冲突';
+    }
+
+    function setMcBatchDisabled(disabled) {
+        mergeResolveAllMineBtn.disabled = disabled;
+        mergeResolveAllTheirsBtn.disabled = disabled;
+        mergeResolveAllWorkingBtn.disabled = disabled;
+        mergeRefreshConflictsBtn.disabled = disabled;
+    }
+
+    function renderMergeConflicts(conflicts) {
+        if (!conflicts || conflicts.length === 0) {
+            mergeConflictsSection.style.display = 'none';
+            mergeConflictList.innerHTML = '';
+            return;
+        }
+        mergeConflictsSection.style.display = '';
+        mergeConflictCount.textContent = conflicts.length;
+        mergeConflictList.innerHTML = conflicts.map(c =>
+            '<div class="mc-item" data-path="' + escapeHtml(c.path) + '"' + (c.localDeleted ? ' data-local-deleted="1"' : '') + '>' +
+                '<div class="mc-meta"><span class="mc-tag">' + escapeHtml(mcTypeLabel(c.conflictType)) + '</span>' + (c.localDeleted ? '<span class="mc-tag local-deleted">本地已删除</span>' : '') + escapeHtml(c.displayName) + '</div>' +
+                '<div class="mc-buttons">' +
+                    '<button class="mc-merge-btn" title="打开三向合并编辑器手动修改冲突">编辑冲突</button>' +
+                    '<button class="mc-btn" data-action="working" title="将当前工作副本（已去除冲突标记）标记为已解决">标记已解决</button>' +
+                    '<button class="mc-secondary mc-btn" data-action="mine-full" title="使用本地版本，完全放弃合入的修改">使用本地</button>' +
+                    '<button class="mc-secondary mc-btn" data-action="theirs-full" title="使用合入版本，完全放弃本地修改">使用合并方</button>' +
+                '</div>' +
+            '</div>'
+        ).join('');
+
+        function doMcResolve(item, action) {
+            const filePath = item.getAttribute('data-path');
+            item.querySelectorAll('.mc-btn').forEach(b => b.disabled = true);
+            item.classList.add('resolving');
+            vscode.postMessage({ command: 'resolveMergeConflictFile', filePath: filePath, resolution: action });
+        }
+
+        mergeConflictList.querySelectorAll('.mc-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const item = btn.closest('.mc-item');
+                const action = btn.getAttribute('data-action');
+                if (action === 'working' && item.getAttribute('data-local-deleted') === '1' && !item.querySelector('.mc-confirm')) {
+                    const confirmDiv = document.createElement('div');
+                    confirmDiv.className = 'mc-confirm';
+                    confirmDiv.innerHTML = '该文件处于本地删除状态：标记已解决会保留删除；如需保留文件请用「使用合并方」。' +
+                        '<button class="mc-confirm-ok">保留删除并解决</button><button class="mc-secondary mc-confirm-cancel">取消</button>';
+                    confirmDiv.querySelector('.mc-confirm-ok').addEventListener('click', () => doMcResolve(item, action));
+                    confirmDiv.querySelector('.mc-confirm-cancel').addEventListener('click', () => confirmDiv.remove());
+                    item.appendChild(confirmDiv);
+                    return;
+                }
+                doMcResolve(item, action);
+            });
+        });
+
+        mergeConflictList.querySelectorAll('.mc-merge-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const item = btn.closest('.mc-item');
+                const filePath = item.getAttribute('data-path');
+                vscode.postMessage({ command: 'openMergeEditorFile', filePath: filePath });
+            });
+        });
+    }
+
     function onMergeFinished(success, hasConflicts, commitFailed) {
         mergeRunning = false;
         if (success && hasConflicts) {
@@ -524,6 +597,27 @@
                 break;
             case 'mergeFinished':
                 onMergeFinished(message.success === true, message.hasConflicts === true, message.commitFailed === true);
+                break;
+            case 'mergeConflictsUpdated':
+                setMcBatchDisabled(false);
+                mergeResolveProgress.style.display = 'none';
+                renderMergeConflicts(message.conflicts);
+                break;
+            case 'mergeResolveProgress':
+                mergeResolveProgress.style.display = '';
+                mergeResolveProgress.textContent = '正在解决 (' + (message.progress || 0) + '%): ' + (message.currentFile || '');
+                break;
+            case 'mergeResolveError':
+                setMcBatchDisabled(false);
+                mergeResolveProgress.style.display = '';
+                mergeResolveProgress.textContent = '错误: ' + (message.error || '');
+                if (message.filePath) {
+                    const item = mergeConflictList.querySelector('[data-path="' + (message.filePath || '').replace(/"/g, '\\"') + '"]');
+                    if (item) {
+                        item.classList.remove('resolving');
+                        item.querySelectorAll('.mc-btn').forEach(b => b.disabled = false);
+                    }
+                }
                 break;
             case 'patchGenerationStarted':
                 generatePatchButton.disabled = true;
@@ -1307,6 +1401,22 @@
 
     document.getElementById('resolveMergeConflictsButton').addEventListener('click', () => {
         vscode.postMessage({ command: 'openMergeConflicts' });
+    });
+
+    function startMcBatch(resolution, label) {
+        setMcBatchDisabled(true);
+        mergeResolveProgress.style.display = '';
+        mergeResolveProgress.textContent = label;
+        vscode.postMessage({ command: 'resolveAllMergeConflicts', resolution: resolution });
+    }
+    mergeResolveAllMineBtn.addEventListener('click', () => startMcBatch('mine-full', '正在批量解决...'));
+    mergeResolveAllTheirsBtn.addEventListener('click', () => startMcBatch('theirs-full', '正在批量解决...'));
+    mergeResolveAllWorkingBtn.addEventListener('click', () => startMcBatch('working', '正在批量解决...'));
+    mergeRefreshConflictsBtn.addEventListener('click', () => {
+        setMcBatchDisabled(true);
+        mergeResolveProgress.style.display = '';
+        mergeResolveProgress.textContent = '重新检测冲突...';
+        vscode.postMessage({ command: 'refreshMergeConflicts' });
     });
 
     document.getElementById('commitMergeButton').addEventListener('click', () => {

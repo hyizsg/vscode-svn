@@ -85,6 +85,20 @@
         <div id="mergeOutput" class="merge-output"></div>
     </div>
 
+    <div id="mergeConflictsSection" class="merge-conflicts" style="display: none;">
+        <div class="merge-conflicts-header">
+            <h3>冲突文件 (<span id="mergeConflictCount">0</span>)</h3>
+            <div class="merge-conflicts-batch">
+                <button id="mergeResolveAllMineBtn" class="mc-secondary">全部使用本地</button>
+                <button id="mergeResolveAllTheirsBtn" class="mc-secondary">全部使用合并方</button>
+                <button id="mergeResolveAllWorkingBtn" class="mc-secondary">全部标记已解决</button>
+                <button id="mergeRefreshConflictsBtn" class="mc-secondary">重新检测</button>
+            </div>
+        </div>
+        <div id="mergeResolveProgress" class="mc-progress" style="display:none;"></div>
+        <div id="mergeConflictList"></div>
+    </div>
+
     <div class="log-footer">
         <div class="log-footer-info">
             <span class="log-footer-navigation">
@@ -99,7 +113,7 @@
                 <span class="btn-line1">合并到分支...</span>
                 <span class="btn-line2"></span>
             </button>
-            <button id="resolveMergeConflictsButton" style="display:none;" title="打开冲突解决面板">解决冲突</button>
+            <button id="resolveMergeConflictsButton" style="display:none;" title="重新检测并在本面板显示冲突文件">解决冲突</button>
             <button id="commitMergeButton" style="display:none;" title="冲突解决后提交合并结果">提交合并</button>
             <button id="retryCommitMergeButton" style="display:none;" title="按原提交信息再次提交合并结果">再次提交</button>
             <button id="generatePatchButton" style="display:none;" title="根据选中的日志版本生成 Lua patch">生成 patch</button>

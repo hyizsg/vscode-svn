@@ -1232,7 +1232,7 @@ export class SvnLogPanel {
                 appendOutput(`\n⚠️ 合并产生 ${conflicts.length} 个冲突，请先解决冲突后再提交：\n`);
                 conflicts.forEach(conflict => appendOutput(`  C ${conflict.path}\n`));
                 webview.postMessage({ command: 'mergeFinished', success: true, hasConflicts: true });
-                await vscode.commands.executeCommand('vscode-svn.scanAndResolveConflicts', vscode.Uri.file(target));
+                await this._postMergeConflicts();
                 return;
             }
 
@@ -1260,6 +1260,115 @@ export class SvnLogPanel {
         }
     }
 
+    private _mergeConflictBaseDir(): string {
+        return this._mergeTargetPath || this._targetPath;
+    }
+
+    private async _postMergeConflicts(extra?: Record<string, any>): Promise<void> {
+        const baseDir = this._mergeConflictBaseDir();
+        try {
+            const list = await this.svnService.getMergeConflicts(baseDir);
+            this._panel.webview.postMessage({
+                command: 'mergeConflictsUpdated',
+                conflicts: list.map(c => ({
+                    path: c.path,
+                    displayName: c.displayName,
+                    conflictType: c.conflictType,
+                    localDeleted: c.localDeleted === true
+                })),
+                ...(extra || {})
+            });
+        } catch (error: any) {
+            this._panel.webview.postMessage({ command: 'mergeResolveError', error: error.message });
+        }
+    }
+
+    private _toBatchStrategy(resolution: string): 'mine' | 'theirs' | 'working' {
+        if (resolution === 'mine-full') { return 'mine'; }
+        if (resolution === 'theirs-full') { return 'theirs'; }
+        return 'working';
+    }
+
+    private async _resolveMergeConflictFile(filePath: string, resolution: 'working' | 'mine-full' | 'theirs-full'): Promise<void> {
+        try {
+            await this.svnService.resolveMergeConflict(filePath, resolution);
+            await this._postMergeConflicts({ resolvedFile: filePath });
+        } catch (error: any) {
+            this._panel.webview.postMessage({ command: 'mergeResolveError', filePath, error: error.message });
+        }
+    }
+
+    private async _resolveAllMergeConflicts(resolution: string): Promise<void> {
+        try {
+            const baseDir = this._mergeConflictBaseDir();
+            const list = await this.svnService.getMergeConflicts(baseDir);
+            const filePaths = list.map(c => c.path);
+            if (filePaths.length === 0) {
+                this._panel.webview.postMessage({ command: 'mergeConflictsUpdated', conflicts: [], resolvedAll: true });
+                return;
+            }
+            await this.svnService.resolveConflicts(
+                filePaths,
+                this._toBatchStrategy(resolution),
+                (currentFile: string, progress: number) => {
+                    this._panel.webview.postMessage({ command: 'mergeResolveProgress', currentFile, progress });
+                }
+            );
+            await this._postMergeConflicts({ resolvedAll: true });
+        } catch (error: any) {
+            this._panel.webview.postMessage({ command: 'mergeResolveError', error: error.message });
+        }
+    }
+
+    private async _openMergeEditorFile(filePath: string): Promise<void> {
+        try {
+            const files = await this.svnService.getMergeConflictFiles(filePath);
+            const baseUri = files.base ? vscode.Uri.file(files.base) : undefined;
+            const mineUri = files.mine ? vscode.Uri.file(files.mine) : undefined;
+            const theirsUri = files.theirs ? vscode.Uri.file(files.theirs) : undefined;
+            const outputUri = vscode.Uri.file(filePath);
+
+            if (baseUri && mineUri && theirsUri) {
+                try {
+                    await vscode.commands.executeCommand('_open.mergeEditor', {
+                        base: baseUri,
+                        input1: { uri: mineUri, title: '本地（Mine）', description: '工作副本修改' },
+                        input2: { uri: theirsUri, title: '合并方（Theirs）', description: '即将合入的版本' },
+                        output: outputUri
+                    });
+                    vscode.window.showInformationMessage(
+                        `已打开三向合并编辑器: ${path.basename(filePath)}。编辑完成后请保存输出文件，然后点本项“标记已解决”即可。`
+                    );
+                    return;
+                } catch (mergeErr: any) {
+                    try {
+                        await vscode.commands.executeCommand(
+                            'vscode.diff', mineUri, theirsUri,
+                            `${path.basename(filePath)}: 本地 ↔ 合并方`,
+                            { preview: false }
+                        );
+                        const doc2 = await vscode.workspace.openTextDocument(outputUri);
+                        await vscode.window.showTextDocument(doc2, { preview: false, viewColumn: vscode.ViewColumn.Beside });
+                        vscode.window.showWarningMessage(
+                            `Merge Editor 不可用，已回退为双窗对比 + 手动编辑。原因: ${mergeErr.message || mergeErr}`
+                        );
+                        return;
+                    } catch (diffErr: any) {
+                        this._panel.webview.postMessage({ command: 'mergeResolveError', filePath, error: `打开三向合并失败: ${diffErr.message}` });
+                        return;
+                    }
+                }
+            }
+            const doc = await vscode.workspace.openTextDocument(outputUri);
+            await vscode.window.showTextDocument(doc, { preview: false });
+            vscode.window.showWarningMessage(
+                `未找全 base/mine/theirs 临时文件，已退回为单文件编辑模式。请去除冲突标记后点“标记已解决”。`
+            );
+        } catch (error: any) {
+            this._panel.webview.postMessage({ command: 'mergeResolveError', filePath, error: `打开三向合并失败: ${error.message}` });
+        }
+    }
+
     private async _commitMerge(mergeSourceUrl?: string): Promise<void> {
         if (this._mergeInProgress) { return; }
         const target = this._mergeTargetPath;
@@ -1280,6 +1389,7 @@ export class SvnLogPanel {
                 appendOutput(`\n⚠️ 还有 ${conflicts.length} 个文件冲突未解决，无法提交：\n`);
                 conflicts.forEach(conflict => appendOutput(`  C ${conflict.path}\n`));
                 webview.postMessage({ command: 'mergeFinished', success: true, hasConflicts: true });
+                await this._postMergeConflicts();
                 return;
             }
 
@@ -1362,9 +1472,19 @@ export class SvnLogPanel {
                         this.svnService.cancelCurrentCommand();
                         break;
                     case 'openMergeConflicts':
+                    case 'refreshMergeConflicts':
                         if (this._mergeTargetPath) {
-                            await vscode.commands.executeCommand('vscode-svn.scanAndResolveConflicts', vscode.Uri.file(this._mergeTargetPath));
+                            await this._postMergeConflicts({ refreshed: true });
                         }
+                        break;
+                    case 'resolveMergeConflictFile':
+                        await this._resolveMergeConflictFile(message.filePath, message.resolution);
+                        break;
+                    case 'resolveAllMergeConflicts':
+                        await this._resolveAllMergeConflicts(message.resolution);
+                        break;
+                    case 'openMergeEditorFile':
+                        await this._openMergeEditorFile(message.filePath);
                         break;
                     case 'commitMerge':
                         await this._commitMerge();
