@@ -1406,7 +1406,31 @@ export class SvnLogPanel {
 
             this.svnService.onCommandOutput = (data: string) => appendOutput(data);
             try {
-                await this.svnService.commitWorkingCopy(target, message);
+                try {
+                    await this.svnService.commitWorkingCopy(target, message);
+                } catch (error: any) {
+                    this._throwIfMergeCancelled();
+                    if (!/out of date|E155011|E160028/i.test(error.message)) { throw error; }
+                    appendOutput('\n工作副本版本过期，正在更新目标目录后重试提交…\n');
+                    let updateError: unknown;
+                    try {
+                        await this.svnService.updateToHead(target);
+                    } catch (error) {
+                        updateError = error;
+                    }
+                    this._throwIfMergeCancelled();
+                    const conflicts = await this.svnService.getMergeConflicts(target);
+                    this._throwIfMergeCancelled();
+                    if (conflicts.length > 0) {
+                        appendOutput(`\n更新产生 ${conflicts.length} 个冲突，请解决后再提交合并结果。\n`);
+                        webview.postMessage({ command: 'mergeFinished', success: true, hasConflicts: true });
+                        await this._postMergeConflicts();
+                        return;
+                    }
+                    if (updateError) { throw updateError; }
+                    appendOutput('\n更新完成，正在使用原提交信息重试提交合并结果…\n');
+                    await this.svnService.commitWorkingCopy(target, message);
+                }
             } finally {
                 this.svnService.onCommandOutput = undefined;
             }

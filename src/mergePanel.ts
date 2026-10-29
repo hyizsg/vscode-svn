@@ -593,7 +593,9 @@ export class SvnMergePanel {
         panel.webview.onDidReceiveMessage(async (msg) => {
             if (msg.command === 'ready') {
                 // webview 脚本已就绪，开始执行
-                startMerge();
+                void startMerge().catch((error: any) => {
+                    safePost({ command: 'done', success: false, output: error.message || String(error), conflicts: [] });
+                });
             } else if (msg.command === 'close') {
                 panel.dispose();
             } else if (msg.command === 'openCommitPanel') {
@@ -722,7 +724,9 @@ export class SvnMergePanel {
         // 兆尼回退：如果 3 秒内 webview 未发送 ready（例如老版本缓存），也主动启动
         setTimeout(() => {
             if (!started && !disposed) {
-                startMerge();
+                void startMerge().catch((error: any) => {
+                    safePost({ command: 'done', success: false, output: error.message || String(error), conflicts: [] });
+                });
             }
         }, 3000);
     }

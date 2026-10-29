@@ -3051,7 +3051,7 @@ export class SvnService {
       return conflicts;
     } catch (error: any) {
       this.outputChannel.appendLine(`[getMergeConflicts] 失败: ${error.message}`);
-      return [];
+      throw error;
     }
   }
 
