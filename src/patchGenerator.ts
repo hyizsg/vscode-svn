@@ -383,20 +383,22 @@ export class PatchGenerator {
         const lines = content.trim().split(/\r?\n/);
         if (lines[0]?.trim() === '--[[') {
             const closing = lines.findIndex((line, index) => index > 0 && line.trim() === ']]');
-            if (closing > 0 && lines.slice(1, closing).some(line => line.trim() === 'start')) {
+            if (closing > 0 && lines[closing - 1].trim() === 'start') {
                 lines.splice(0, closing + 1);
             }
         }
 
-        let opening = -1;
-        for (let index = lines.length - 1; index >= 0; index--) {
-            if (lines[index].trim() === '--[[') {
-                opening = index;
-                break;
+        if (lines[lines.length - 1]?.trim() === ']]' && lines[lines.length - 2]?.trim() === 'end') {
+            let opening = -1;
+            for (let index = lines.length - 3; index >= 0; index--) {
+                const line = lines[index].trim();
+                if (line === '--[[') {
+                    opening = index;
+                    break;
+                }
+                if (line === ']]') { break; }
             }
-        }
-        if (opening >= 0 && lines.slice(opening + 1).some(line => line.trim() === 'end')) {
-            lines.splice(opening);
+            if (opening >= 0) { lines.splice(opening); }
         }
         return lines.join('\n').trim();
     }
