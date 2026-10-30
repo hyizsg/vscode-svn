@@ -292,12 +292,73 @@ end
 end
 
 
+local function sortedConfigKeys(a, b)
+    local keys = {}
+    local seen = {}
+    for key in pairs(a) do
+        keys[#keys + 1] = key
+        seen[key] = true
+    end
+    for key in pairs(b or {}) do
+        if not seen[key] then keys[#keys + 1] = key end
+    end
+    table.sort(keys, function(x, y)
+        if type(x) ~= type(y) then return type(x) < type(y) end
+        if type(x) == "number" then return x < y end
+        return tostring(x) < tostring(y)
+    end)
+    return keys
+end
+
+local function configLiteral(value)
+    local kind = type(value)
+    if kind == "nil" or kind == "boolean" then return tostring(value) end
+    if kind == "string" then return string.format("%q", value) end
+    if kind == "number" then
+        assert(value == value and value ~= math.huge and value ~= -math.huge, "配置值必须是有限数值")
+        return string.format("%0.18g", value)
+    end
+    if kind == "table" then
+        local fields = {}
+        for _, key in ipairs(sortedConfigKeys(value)) do
+            assert(type(key) ~= "table", "配置表不支持 table 键")
+            fields[#fields + 1] = "[" .. configLiteral(key) .. "] = " .. configLiteral(value[key])
+        end
+        return "{ " .. table.concat(fields, ", ") .. " }"
+    end
+    error("配置表不支持 " .. kind .. " 值")
+end
+
+local function startConfigGen(fileName)
+    local old = assert(loadfile("old/" .. fileName .. ".lua"))()
+    local new = assert(loadfile("new/" .. fileName .. ".lua"))()
+    assert(type(old) == "table" and type(new) == "table", fileName .. " 必须返回配置表")
+    local updates = {}
+    local function compare(a, b, target)
+        for _, key in ipairs(sortedConfigKeys(a, b)) do
+            assert(type(key) ~= "table", "配置表不支持 table 键")
+            local member = target .. "[" .. configLiteral(key) .. "]"
+            if type(a[key]) == "table" and type(b[key]) == "table" then
+                compare(a[key], b[key], member)
+            elseif a[key] ~= b[key] then
+                updates[#updates + 1] = member .. " = " .. configLiteral(b[key])
+            end
+        end
+    end
+    compare(old, new, "config")
+    if #updates == 0 then return "" end
+    local moduleName = "res.config." .. fileName:gsub("/", ".")
+    return "do\nlocal config = require(" .. configLiteral(moduleName) .. ")\n" ..
+        table.concat(updates, "\n") .. "\nend\n"
+end
+
+local isResourceConfig = dataDir:gsub("\\", "/"):match("/res/config/?$") ~= nil
 local file = io.open("patch.lua","w+")
 local strPatch = ""
 strPatch = strPatch..fixStartStr
 for i=1,#fileList do
-    local fileName = string.gsub(fileList[i],".lua","")
-    strPatch = strPatch..startGen(fileName)
+    local fileName = string.gsub(fileList[i],"%.lua$","")
+    strPatch = strPatch .. (isResourceConfig and startConfigGen(fileName) or startGen(fileName))
     if i < #fileList then
         strPatch = strPatch.."\n--------------------------------------------------\n"        
     end

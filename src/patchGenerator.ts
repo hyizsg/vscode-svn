@@ -16,6 +16,7 @@ export interface PatchLogEntry {
 
 interface PatchPathMappings {
     clientConfig?: string;
+    resourceConfig?: string;
     battleConfig?: string;
     clientSource?: string;
     battleSource?: string;
@@ -185,6 +186,7 @@ export class PatchGenerator {
     private async getPathMappings(projectDev: string, repoRoot: string): Promise<PatchPathMappings> {
         const entries: Array<[keyof PatchPathMappings, string]> = [
             ['clientConfig', path.join(projectDev, 'res', 'data')],
+            ['resourceConfig', path.join(projectDev, 'res', 'config')],
             ['battleConfig', path.join(projectDev, 'src', 'battle', 'cfg')],
             ['clientSource', path.join(projectDev, 'src')],
             ['battleSource', path.join(projectDev, 'src', 'battle')]
@@ -212,7 +214,11 @@ export class PatchGenerator {
         return filePath.slice(prefix.length + 1);
     }
 
-    private getConfigKind(filePath: string, mappings: PatchPathMappings): 'client' | 'battle' | undefined {
+    private getConfigKind(filePath: string, mappings: PatchPathMappings): 'client' | 'resource' | 'battle' | undefined {
+        const resourceRelative = this.relativeTo(filePath, mappings.resourceConfig);
+        if (resourceRelative && /\.lua$/i.test(resourceRelative)) {
+            return 'resource';
+        }
         const clientRelative = this.relativeTo(filePath, mappings.clientConfig);
         if (clientRelative && !clientRelative.includes('/') && /\.lua$/i.test(clientRelative)) {
             return 'client';
@@ -260,7 +266,22 @@ export class PatchGenerator {
                 'create_patch.lua',
                 'patch.lua',
                 path.join(projectDev, 'res', 'data'),
-                true
+                true,
+                mappings.clientConfig!
+            ));
+        }
+        const resourcePaths = modified.filter(item => this.getConfigKind(item.path, mappings) === 'resource');
+        if (resourcePaths.length > 0) {
+            patches.push(await this.runConfigGenerator(
+                projectDev,
+                repoRoot,
+                entry,
+                resourcePaths,
+                'create_patch.lua',
+                'patch.lua',
+                path.join(projectDev, 'res', 'config'),
+                true,
+                mappings.resourceConfig!
             ));
         }
         if (battlePaths.length > 0) {
@@ -272,7 +293,8 @@ export class PatchGenerator {
                 'create_patch_battle.lua',
                 'patch_battle.lua',
                 path.join(projectDev, 'src', 'battle', 'cfg'),
-                false
+                false,
+                mappings.battleConfig!
             ));
         }
         return patches.filter(Boolean).join('\n\n');
@@ -286,12 +308,21 @@ export class PatchGenerator {
         generatorName: string,
         outputName: string,
         dataDir: string,
-        withMetadata: boolean
+        withMetadata: boolean,
+        sourcePrefix: string
     ): Promise<string> {
         const generator = path.join(__dirname, '..', 'resources', 'patch-tools', generatorName);
         if (!fs.existsSync(generator)) {
             throw new Error(`插件内置配置表 patch 脚本缺失: ${generatorName}`);
         }
+        const fileNames = paths.map(item => {
+            const relative = this.relativeTo(item.path, sourcePrefix);
+            if (!relative || path.posix.isAbsolute(relative) || relative.includes('\\') ||
+                relative.split('/').some(part => part === '..' || part === '.')) {
+                throw new Error(`无效的配置表路径: ${item.path}`);
+            }
+            return relative;
+        });
 
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vscode-svn-config-patch-'));
         const oldDir = path.join(tempDir, 'old');
@@ -301,8 +332,8 @@ export class PatchGenerator {
         fs.copyFileSync(generator, path.join(tempDir, generatorName));
 
         try {
-            for (const item of paths) {
-                const fileName = path.posix.basename(item.path);
+            for (const [index, item] of paths.entries()) {
+                const fileName = fileNames[index];
                 const url = `${repoRoot}${item.path}`;
                 const oldContent = await this.svnService.executeSvnCommand(
                     `cat -r ${item.oldRevision} "${url}@${item.newRevision}"`, projectDev, false
@@ -310,6 +341,8 @@ export class PatchGenerator {
                 const newContent = await this.svnService.executeSvnCommand(
                     `cat -r ${item.newRevision} "${url}@${item.newRevision}"`, projectDev, false
                 );
+                fs.mkdirSync(path.dirname(path.join(oldDir, fileName)), { recursive: true });
+                fs.mkdirSync(path.dirname(path.join(newDir, fileName)), { recursive: true });
                 fs.writeFileSync(path.join(oldDir, fileName), oldContent, 'utf8');
                 fs.writeFileSync(path.join(newDir, fileName), newContent, 'utf8');
             }
@@ -320,7 +353,7 @@ export class PatchGenerator {
                 const author = entry.author && entry.author !== localUser ? `${localUser} for ${entry.author}` : localUser;
                 args.push(dataDir, author, entry.message || `r${entry.revision}`);
             }
-            args.push(...paths.map(item => path.posix.basename(item.path)));
+            args.push(...fileNames);
             await this.execFile('lua', args, tempDir);
             const outputFile = path.join(tempDir, outputName);
             if (!fs.existsSync(outputFile)) {
