@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { SvnService } from './svnService';
+import { CommitBlockedFilesError, SvnService } from './svnService';
 import { SvnDiffProvider } from './diffProvider';
 import { CommitLogStorage } from './commitLogStorage';
 import { SvnFilterService } from './filterService';
@@ -1061,6 +1061,26 @@ export class SvnFolderCommitPanel {
         }
     }
 
+    private async _validateCommitSelection(files: unknown): Promise<void> {
+        const allowed = new Map(this._fileStatuses.map(file => [file.path, file]));
+        if (!Array.isArray(files) || files.length === 0 ||
+            files.some(file => typeof file !== 'string' || !allowed.has(file))) {
+            throw new Error('待提交文件已变化，请刷新后重新选择');
+        }
+        const targets = new Set<string>();
+        for (const file of new Set<string>(this.filterService.filterFiles(files, this.folderPath))) {
+            const status = allowed.get(file)!;
+            if (status.type === 'deleted' || status.type === 'missing') { continue; }
+            if (status.type === 'unversioned' && (await fs.promises.lstat(file)).isDirectory()) {
+                const children = await this.svnService.collectUnversionedCommitFiles(file);
+                this.filterService.filterFiles(children, this.folderPath).forEach(child => targets.add(child));
+            } else {
+                targets.add(file);
+            }
+        }
+        await this.svnService.validateCommitFiles(Array.from(targets));
+    }
+
     private _setupMessageHandlers() {
         // 添加一个标志，表示 AI 生成是否正在进行中
         let isGeneratingAILog = false;
@@ -1078,6 +1098,18 @@ export class SvnFolderCommitPanel {
                     case 'commitMessageChanged':
                         // 同步用户当前编辑的提交信息，以便 webview 重载时保留
                         this._currentCommitMessage = typeof message.message === 'string' ? message.message : '';
+                        return;
+                    case 'validateCommit':
+                        try {
+                            await this._validateCommitSelection(message.files);
+                            this._panel.webview.postMessage({ command: 'commitValidationResult', requestId: message.requestId, success: true });
+                        } catch (error: any) {
+                            this._panel.webview.postMessage({
+                                command: 'commitValidationResult', requestId: message.requestId, success: false,
+                                error: error.message,
+                                blockedFiles: error instanceof CommitBlockedFilesError ? error.files : []
+                            });
+                        }
                         return;
                     case 'commit':
                         await this._commitFiles(message.files, message.message);

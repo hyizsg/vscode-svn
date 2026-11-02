@@ -439,7 +439,11 @@
         vscode.postMessage({ command: 'showSideBySideDiff', file: filePath });
     }
 
+    let pendingValidation = null;
+    let validationRequestId = 0;
+
     function submitCommit() {
+        if (pendingValidation || pendingCommit) return;
         const message = document.getElementById('commitMessage').value;
         if (!message) {
             vscode.postMessage({ 
@@ -458,12 +462,39 @@
             return;
         }
 
-        // 提交前先弹确认框展示文件列表与提交信息（只读）
-        showCommitConfirm(message, selectedFilesList);
+        pendingValidation = { requestId: ++validationRequestId, message, files: selectedFilesList };
+        const button = document.getElementById('submitButton');
+        button.disabled = true;
+        button.textContent = '检查中...';
+        vscode.postMessage({ command: 'validateCommit', requestId: pendingValidation.requestId, files: selectedFilesList });
     }
 
     // 待确认的提交内容
     let pendingCommit = null;
+
+    function showCommitBlocked(error, files) {
+        const overlay = document.getElementById('commitBlockedOverlay');
+        document.getElementById('commitBlockedTitle').textContent = files.length ? '禁止提交' : '提交前检查失败';
+        document.getElementById('commitBlockedReason').textContent = files.length
+            ? `以下 ${files.length} 个文件包含 --@test 标记，请移除标记或取消勾选后重试。`
+            : error;
+        const list = document.getElementById('commitBlockedFileList');
+        list.replaceChildren();
+        list.style.display = files.length ? '' : 'none';
+        files.forEach(file => {
+            const row = document.createElement('div');
+            row.className = 'commit-blocked-file-item';
+            row.textContent = `${file.path}:${file.line}`;
+            list.appendChild(row);
+        });
+        overlay.style.display = '';
+        document.getElementById('commitBlockedClose').focus();
+    }
+
+    function hideCommitBlocked() {
+        document.getElementById('commitBlockedOverlay').style.display = 'none';
+        document.getElementById('submitButton').focus();
+    }
 
     /**
      * 展示提交确认弹框：只读展示待提交文件列表与提交信息
@@ -561,11 +592,15 @@
             if (e.target === overlay) hideCommitConfirm();
         });
 
-        // ESC 关闭确认框
+        const blockedOverlay = document.getElementById('commitBlockedOverlay');
+        document.getElementById('commitBlockedClose').addEventListener('click', hideCommitBlocked);
+        blockedOverlay.addEventListener('mousedown', e => {
+            if (e.target === blockedOverlay) hideCommitBlocked();
+        });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && overlay.style.display !== 'none') {
-                hideCommitConfirm();
-            }
+            if (e.key !== 'Escape') return;
+            if (blockedOverlay.style.display !== 'none') hideCommitBlocked();
+            if (overlay.style.display !== 'none') hideCommitConfirm();
         });
     }
 
@@ -970,6 +1005,20 @@
             case 'refreshFinished':
                 setRefreshLoading(false);
                 break;
+            case 'commitValidationResult': {
+                if (!pendingValidation || message.requestId !== pendingValidation.requestId) break;
+                const snapshot = pendingValidation;
+                pendingValidation = null;
+                const button = document.getElementById('submitButton');
+                button.disabled = false;
+                button.textContent = '提交';
+                if (message.success === true) {
+                    showCommitConfirm(snapshot.message, snapshot.files);
+                } else {
+                    showCommitBlocked(message.error || '提交前检查失败', message.blockedFiles || []);
+                }
+                break;
+            }
             case 'commitStarted':
                 showCommitOutput();
                 break;

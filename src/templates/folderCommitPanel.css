@@ -831,6 +831,17 @@ body.committing .commit-output {
     border-bottom: none;
 }
 
+.commit-blocked-file-item {
+    padding: 6px 10px;
+    font-size: 12px;
+    overflow-wrap: anywhere;
+    border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.commit-blocked-file-item:last-child {
+    border-bottom: none;
+}
+
 .commit-confirm-file-status {
     flex-shrink: 0;
     min-width: 60px;

@@ -116,6 +116,19 @@
         </div>
     </div>
 
+    <div id="commitBlockedOverlay" class="commit-confirm-overlay" style="display: none;">
+        <div class="commit-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="commitBlockedTitle">
+            <div id="commitBlockedTitle" class="commit-confirm-title">禁止提交</div>
+            <div class="commit-confirm-body">
+                <div id="commitBlockedReason" class="commit-confirm-section-label"></div>
+                <div id="commitBlockedFileList" class="commit-confirm-file-list"></div>
+            </div>
+            <div class="commit-confirm-footer">
+                <button id="commitBlockedClose">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <script src="{{SCRIPT_URI}}"></script>
 </body>
 </html> 

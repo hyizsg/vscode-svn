@@ -9,9 +9,16 @@ import { SvnAuthService } from './svnAuthService';
 import { SvnAuthDialog } from './svnAuthDialog';
 import { getOutputChannel } from './outputChannel';
 import { DOMParser, Element } from '@xmldom/xmldom';
+import { minimatch } from 'minimatch';
 
 const exec = promisify(cp.exec);
 const fsExists = promisify(fs.exists);
+
+export class CommitBlockedFilesError extends Error {
+  constructor(public readonly files: Array<{ path: string; line: number }>) {
+    super(`以下文件包含 --@test 标记，禁止提交，请移除标记并勾选对应文件后重试：\n${files.map(file => `${file.path}:${file.line}`).join('\n')}`);
+  }
+}
 
 interface SvnStatus {
   status: string;
@@ -980,15 +987,78 @@ export class SvnService {
     }
   }
 
+  public async collectUnversionedCommitFiles(directory: string): Promise<string[]> {
+    const parent = path.dirname(directory);
+    const target = parent.includes('@') ? `${parent}@` : parent;
+    const { stdout } = await promisify(cp.execFile)('svn', ['proplist', '--xml', '--verbose', '--show-inherited-props', '--', target], {
+      cwd: parent, env: this.getEnhancedEnvironment(), maxBuffer: 10 * 1024 * 1024
+    });
+    const xml = new DOMParser().parseFromString(stdout, 'text/xml');
+    const patterns: string[] = [];
+    // svn:ignore 不继承到新目录内部，只有 global-ignores 影响递归 add。
+    for (const tag of ['property', 'inherited_property']) {
+      for (const prop of Array.from(xml.getElementsByTagName(tag))) {
+        if (prop.getAttribute('name') === 'svn:global-ignores') {
+          patterns.push(...(prop.textContent || '').split(/\s+/).filter(Boolean));
+        }
+      }
+    }
+    let globalIgnores = '*.o *.lo *.la *.al .libs *.so *.so.[0-9]* *.a *.pyc *.pyo __pycache__ *.rej *~ #*# .#* .*.swp .DS_Store';
+    try {
+      const configPath = process.platform === 'win32'
+        ? path.join(process.env.APPDATA || os.homedir(), 'Subversion', 'config')
+        : path.join(os.homedir(), '.subversion', 'config');
+      const config = await fs.promises.readFile(configPath, 'utf8');
+      let section = '';
+      let collecting = false;
+      for (const line of config.split(/\r?\n/)) {
+        if (/^\s*[#;]/.test(line) || !line.trim()) { continue; }
+        const header = /^\s*\[([^\]]+)\]/.exec(line);
+        if (header) { section = header[1].toLowerCase(); collecting = false; continue; }
+        const setting = /^\s*([^=:]+?)\s*[=:]\s*(.*)$/.exec(line);
+        if (setting) {
+          collecting = section === 'miscellany' && setting[1].trim().toLowerCase() === 'global-ignores';
+          if (collecting) { globalIgnores = setting[2]; }
+        } else if (collecting && /^\s/.test(line)) {
+          globalIgnores += ' ' + line.trim();
+        }
+      }
+    } catch (error: any) {
+      if (error.code !== 'ENOENT') { throw error; }
+    }
+    patterns.push(...globalIgnores.split(/\s+/).filter(Boolean));
+    const files: string[] = [];
+    const walk = async (folder: string): Promise<void> => {
+      for (const entry of await fs.promises.readdir(folder, { withFileTypes: true })) {
+        if (entry.name === '.svn' || patterns.some(pattern => minimatch(entry.name, pattern, {
+          dot: true, nobrace: true, noext: true, nonegate: true, nocomment: true
+        }))) { continue; }
+        const file = path.join(folder, entry.name);
+        if (entry.isDirectory()) {
+          if (!fs.existsSync(path.join(file, '.svn'))) { await walk(file); }
+        } else if (entry.isFile()) {
+          files.push(file);
+        }
+      }
+    };
+    await walk(directory);
+    return files;
+  }
+
   public async validateCommitFiles(files: string[], baseFiles: Set<string> = new Set()): Promise<void> {
-    const blocked: string[] = [];
+    const blocked = new Map<string, { path: string; line: number }>();
     const targets = new Set(files);
     for (const file of targets) {
       let content: string;
       try {
         const stat = await fs.promises.lstat(file);
         if (stat.isDirectory()) {
-          await this.validateDirectoryCommit(file, undefined, 'empty', targets);
+          try {
+            await this.validateDirectoryCommit(file, undefined, 'empty', targets);
+          } catch (error) {
+            if (!(error instanceof CommitBlockedFilesError)) { throw error; }
+            error.files.forEach(item => blocked.set(item.path, item));
+          }
           continue;
         }
         if (!stat.isFile()) { continue; }
@@ -1012,11 +1082,11 @@ export class SvnService {
       const index = content.indexOf('--@test');
       if (index >= 0) {
         const line = content.slice(0, index).split(/\r\n|\r|\n/).length;
-        blocked.push(`${file}:${line}`);
+        blocked.set(file, { path: file, line });
       }
     }
-    if (blocked.length > 0) {
-      throw new Error(`以下文件包含 --@test 标记，禁止提交，请移除标记并勾选对应文件后重试：\n${blocked.join('\n')}`);
+    if (blocked.size > 0) {
+      throw new CommitBlockedFilesError(Array.from(blocked.values()));
     }
   }
 
