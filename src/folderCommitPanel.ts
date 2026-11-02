@@ -26,8 +26,6 @@ interface CommitPanelPersistentState {
     hiddenGroups: string[];
 }
 
-const STATE_KEY_MERGE_TARGET = 'mergeToBranch.lastTargetPath';
-
 export class SvnFolderCommitPanel {
     public static currentPanel: SvnFolderCommitPanel | undefined;
     private readonly _panel: vscode.WebviewPanel;
@@ -647,7 +645,7 @@ export class SvnFolderCommitPanel {
     /** 读取并校验合并目标目录，把目录名与分支名下发给前端渲染按钮 */
     private async _postMergeTargetInfo(): Promise<void> {
         if (!this._mergeTargetPath) {
-            const saved = this.context.globalState.get<string>(STATE_KEY_MERGE_TARGET, '');
+            const saved = this.context.globalState.get<string>(this.svnService.getMergeTargetStateKey(this.folderPath), '');
             if (saved && fs.existsSync(saved)) {
                 this._mergeTargetPath = saved;
             }
@@ -693,7 +691,7 @@ export class SvnFolderCommitPanel {
             }
         } catch { /* 源 URL 读取失败时不做同分支校验 */ }
         this._mergeTargetPath = dir;
-        await this.context.globalState.update(STATE_KEY_MERGE_TARGET, dir);
+        await this.context.globalState.update(this.svnService.getMergeTargetStateKey(this.folderPath), dir);
         await this._postMergeTargetInfo();
         return true;
     }

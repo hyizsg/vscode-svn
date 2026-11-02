@@ -9,7 +9,6 @@ import { AiCacheService } from './aiCacheService';
 import { getOutputChannel } from './outputChannel';
 import { PatchGenerator } from './patchGenerator';
 
-const STATE_KEY_MERGE_TARGET = 'mergeToBranch.lastTargetPath';
 const STATE_KEY_MERGE_STATUS = 'mergeToBranch.mergedStatusByPath';
 const STATE_KEY_BRANCH_POINT = 'mergeToBranch.branchPointByPath';
 
@@ -145,10 +144,7 @@ export class SvnLogPanel {
     ) {
         this._panel = panel;
         this._targetPath = targetPath;
-        const savedMergeTarget = context.globalState.get<string>(STATE_KEY_MERGE_TARGET, '');
-        if (savedMergeTarget && fs.existsSync(savedMergeTarget)) {
-            this._mergeTargetPath = savedMergeTarget;
-        }
+        this._restoreMergeTarget();
         this._outputChannel = getOutputChannel();
         this.templateManager = new TemplateManager(extensionUri);
         this.aiService = new AiService();
@@ -209,7 +205,16 @@ export class SvnLogPanel {
      */
     public set targetPath(value: string) {
         this._targetPath = value;
+        this._restoreMergeTarget();
+        this._mergeStatusRefreshSequence++;
+        this._mergedRevisions.clear();
         this._log('目标路径已更新: ' + value);
+    }
+
+    private _restoreMergeTarget(): void {
+        const key = this.svnService.getMergeTargetStateKey(this._targetPath);
+        const saved = this.context.globalState.get<string>(key, '');
+        this._mergeTargetPath = saved && fs.existsSync(saved) ? saved : undefined;
     }
 
     /**
@@ -297,14 +302,12 @@ export class SvnLogPanel {
     private async _switchTarget(newPath: string): Promise<void> {
         if (!newPath || newPath === this._targetPath) { return; }
         this._log(`切换日志目标: ${newPath}`);
-        this._targetPath = newPath;
+        this.targetPath = newPath;
         this._logEntries = [];
         this._minLoadedRevision = null;
         this._isInitialLoad = true;
         this._localRevision = null;
         this._currentFilterState = { isFiltered: false, filterType: 'none', filterDescription: '' };
-        this._mergedRevisions.clear();
-        this._mergeTargetPath = undefined;
         this._panel.title = `SVN日志: ${path.basename(newPath)}`;
         await this._initializeWebviewContent();
         this._getSvnRelativePath();
@@ -1099,6 +1102,8 @@ export class SvnLogPanel {
     }
 
     private async _chooseMergeTarget(): Promise<boolean> {
+        const sourcePath = this._targetPath;
+        const stateKey = this.svnService.getMergeTargetStateKey(sourcePath);
         const picked = await vscode.window.showOpenDialog({
             canSelectFiles: false,
             canSelectFolders: true,
@@ -1118,7 +1123,7 @@ export class SvnLogPanel {
         }
 
         try {
-            const sourceUrl = await this.svnService.getWorkingCopyUrl(this._targetPath);
+            const sourceUrl = await this.svnService.getWorkingCopyUrl(sourcePath);
             const sourceRoot = this._branchRootUrl(sourceUrl);
             const sameBranch = sourceRoot && sourceRoot === this._branchRootUrl(targetUrl);
             if (targetUrl === sourceUrl || sameBranch) {
@@ -1127,12 +1132,13 @@ export class SvnLogPanel {
             }
         } catch { }
 
+        if (this._targetPath !== sourcePath) { return false; }
+        await this.context.globalState.update(stateKey, targetPath);
+        if (this._targetPath !== sourcePath) { return false; }
         this._mergeTargetPath = targetPath;
-        const sourcePath = this._targetPath;
         const revisionRange = this._getLoadedRevisionRange();
         const refreshSequence = ++this._mergeStatusRefreshSequence;
         this._postCachedMergeRevisionStatus(sourcePath, targetPath, revisionRange);
-        await this.context.globalState.update(STATE_KEY_MERGE_TARGET, targetPath);
         const mergeSourceUrl = await this._postMergeTargetInfo(sourcePath, targetPath);
         if (mergeSourceUrl && revisionRange &&
             refreshSequence === this._mergeStatusRefreshSequence &&
@@ -1654,8 +1660,7 @@ export class SvnLogPanel {
                         }
                         break;
                     case 'updateTargetPath':
-                        this._log('更新目标路径: ' + message.targetPath);
-                        this._targetPath = message.targetPath;
+                        this.targetPath = message.targetPath;
                         break;
                     case 'updateLocalRevision':
                         this._localRevision = message.localRevision;

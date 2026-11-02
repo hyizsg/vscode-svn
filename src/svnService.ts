@@ -1570,6 +1570,14 @@ export class SvnService {
     }
   }
 
+  public getMergeTargetStateKey(sourcePath: string): string {
+    const source = path.resolve(sourcePath);
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(source));
+    const projectPath = workspaceFolder?.uri.fsPath || this._findWorkingCopyRoot(source) || source;
+    const normalized = path.resolve(projectPath);
+    return `mergeToBranch.lastTargetPath.${process.platform === 'win32' ? normalized.toLowerCase() : normalized}`;
+  }
+
   /**
    * 向上查找 SVN 工作副本根目录（包含 .svn 的最顶层目录）
    */
