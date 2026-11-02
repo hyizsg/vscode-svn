@@ -575,6 +575,8 @@ export class SvnFolderCommitPanel {
             appendOutput(`正在执行 SVN 提交...\n`);
             // 外部链接属于不同版本库，svn 一次提交只能针对一个仓库：
             // 按仓库分组分别提交（同一提交信息），合并到分支等主仓库专属流程只取主组版本号
+            const filteredTargets = this.filterService.filterFiles(Array.from(commitTargets), this.folderPath);
+            await this.svnService.validateCommitFiles(filteredTargets);
             const repoGroups = this._partitionByRepository(Array.from(commitTargets));
             let mainCommittedRevision: number | undefined;
             for (const repoGroup of repoGroups) {

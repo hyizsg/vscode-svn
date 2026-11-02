@@ -8,6 +8,7 @@ import { SvnFilterService } from './filterService';
 import { SvnAuthService } from './svnAuthService';
 import { SvnAuthDialog } from './svnAuthDialog';
 import { getOutputChannel } from './outputChannel';
+import { DOMParser, Element } from '@xmldom/xmldom';
 
 const exec = promisify(cp.exec);
 const fsExists = promisify(fs.exists);
@@ -979,11 +980,104 @@ export class SvnService {
     }
   }
 
-  /**
-   * 提交文件或文件夹
-   * @param fsPath 文件系统路径
-   * @param message 提交信息
-   */
+  public async validateCommitFiles(files: string[], baseFiles: Set<string> = new Set()): Promise<void> {
+    const blocked: string[] = [];
+    const targets = new Set(files);
+    for (const file of targets) {
+      let content: string;
+      try {
+        const stat = await fs.promises.lstat(file);
+        if (stat.isDirectory()) {
+          await this.validateDirectoryCommit(file, undefined, 'empty', targets);
+          continue;
+        }
+        if (!stat.isFile()) { continue; }
+        const target = file.includes('@') ? `${file}@` : file;
+        const buffer = baseFiles.has(file)
+          ? (await promisify(cp.execFile)('svn', ['cat', '-r', 'BASE', '--', target], {
+              cwd: path.dirname(file), env: this.getEnhancedEnvironment(), encoding: 'buffer', maxBuffer: 50 * 1024 * 1024
+            })).stdout
+          : await fs.promises.readFile(file);
+        if (buffer[0] === 0xFF && buffer[1] === 0xFE) {
+          content = buffer.toString('utf16le');
+        } else if (buffer[0] === 0xFE && buffer[1] === 0xFF) {
+          content = buffer.subarray(2).swap16().toString('utf16le');
+        } else {
+          content = buffer.toString('utf8');
+        }
+      } catch (error: any) {
+        if (error.code === 'ENOENT') { continue; }
+        throw new Error(`提交前检查文件失败: ${file}\n${error.message}`);
+      }
+      const index = content.indexOf('--@test');
+      if (index >= 0) {
+        const line = content.slice(0, index).split(/\r\n|\r|\n/).length;
+        blocked.push(`${file}:${line}`);
+      }
+    }
+    if (blocked.length > 0) {
+      throw new Error(`以下文件包含 --@test 标记，禁止提交，请移除标记并勾选对应文件后重试：\n${blocked.join('\n')}`);
+    }
+  }
+
+  private async validateDirectoryCommit(
+    workingDir: string,
+    changelistName?: string,
+    depth: 'empty' | 'infinity' = 'infinity',
+    selectedFiles?: Set<string>
+  ): Promise<void> {
+    const onCommandOutput = this.onCommandOutput;
+    this.onCommandOutput = undefined;
+    const entries: Element[] = [];
+    const copiedPaths: string[] = [];
+    try {
+      const xml = await this.executeSvnCommand(`status --xml --ignore-externals --depth ${depth}`, workingDir);
+      entries.push(...Array.from(new DOMParser().parseFromString(xml, 'text/xml').getElementsByTagName('entry')));
+      for (const entry of entries) {
+        const status = entry.getElementsByTagName('wc-status').item(0);
+        if (status?.getAttribute('copied') === 'true' &&
+            ['added', 'replaced'].includes(status.getAttribute('item') || '')) {
+          copiedPaths.push(path.resolve(workingDir, entry.getAttribute('path')!));
+        }
+      }
+      for (const copiedPath of copiedPaths) {
+        if (!fs.existsSync(copiedPath) || !fs.lstatSync(copiedPath).isDirectory()) { continue; }
+        const copiedXml = await this.executeSvnCommand('status --xml --verbose --ignore-externals --depth infinity', copiedPath);
+        const copiedEntries = new DOMParser().parseFromString(copiedXml, 'text/xml').getElementsByTagName('entry');
+        for (const entry of Array.from(copiedEntries)) {
+          entry.setAttribute('path', path.resolve(copiedPath, entry.getAttribute('path')!));
+          entries.push(entry);
+        }
+      }
+    } finally {
+      this.onCommandOutput = onCommandOutput;
+    }
+    const files: string[] = [];
+    const baseFiles = new Set<string>();
+    for (const entry of entries) {
+      const status = entry.getElementsByTagName('wc-status').item(0);
+      if (!status) { continue; }
+      const item = status.getAttribute('item');
+      const filePath = path.resolve(workingDir, entry.getAttribute('path')!);
+      const includedByCopy = copiedPaths.some(copiedPath => filePath.startsWith(copiedPath + path.sep));
+      const implicitCopy = depth === 'empty' && includedByCopy && !selectedFiles?.has(filePath);
+      if (implicitCopy && ['deleted', 'missing', 'replaced'].includes(item || '')) {
+        throw new Error(`复制目录包含未勾选的变更，无法检查提交内容，请勾选对应文件后重试：${filePath}`);
+      }
+      if (implicitCopy && item === 'modified') { baseFiles.add(filePath); }
+      if (!['modified', 'added', 'replaced', 'conflicted'].includes(item || '') &&
+          !(item === 'normal' && (status.getAttribute('props') === 'modified' || includedByCopy))) { continue; }
+      if (status.getAttribute('file-external') === 'true') { continue; }
+      if (changelistName !== undefined) {
+        const parent = entry.parentNode;
+        if (parent?.nodeName !== 'changelist' ||
+            (parent as Element).getAttribute('name') !== changelistName) { continue; }
+      }
+      if (fs.existsSync(filePath) && fs.lstatSync(filePath).isFile()) { files.push(filePath); }
+    }
+    await this.validateCommitFiles(files, baseFiles);
+  }
+
   public async commit(fsPath: string, message: string): Promise<void> {
     // 使用公共方法显示输出面板
     this.showOutputChannel('SVN提交操作');
@@ -1002,6 +1096,11 @@ export class SvnService {
 
     try {
       const isDirectory = (await vscode.workspace.fs.stat(vscode.Uri.file(fsPath))).type === vscode.FileType.Directory;
+      if (isDirectory) {
+        await this.validateDirectoryCommit(fsPath);
+      } else {
+        await this.validateCommitFiles([fsPath]);
+      }
       
       this.outputChannel.appendLine('正在检查文件状态...');
       
@@ -1076,6 +1175,7 @@ export class SvnService {
     const { args: msgArgs, file: msgFile } = await this.createCommitMessageArgs(message);
     try {
       this.outputChannel.appendLine(`[commitWorkingCopy] 提交目录: ${workingDir}`);
+      await this.validateDirectoryCommit(workingDir);
       return await this.executeSvnCommand(`commit ${msgArgs}`, workingDir);
     } finally {
       await this.cleanupCommitMessageFile(msgFile);
@@ -1562,6 +1662,7 @@ export class SvnService {
       if (filteredFiles.length === 0) {
         throw new Error('没有可提交的文件（所有文件都被过滤器排除）');
       }
+      await this.validateCommitFiles(filteredFiles);
       
       // 检查是否使用自定义SVN根目录
       let workingDir = basePath;
@@ -2723,6 +2824,7 @@ export class SvnService {
     const { args: msgArgs, file: msgFile } = await this.createCommitMessageArgs(message);
 
     try {
+      await this.validateDirectoryCommit(basePath, changelistName);
       const command = `commit --changelist "${changelistName.replace(/"/g, '\\"')}" ${msgArgs}`;
       const result = await this.executeSvnCommand(command, basePath);
       this.outputChannel.appendLine(result);
