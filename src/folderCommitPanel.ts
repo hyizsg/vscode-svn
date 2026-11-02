@@ -88,6 +88,11 @@ export class SvnFolderCommitPanel {
         this.context.workspaceState.update(key, merged);
     }
 
+    private async _saveCommitMessage(message: string): Promise<void> {
+        this._currentCommitMessage = message;
+        await this.context.workspaceState.update(`${this._getPersistentStateKey()}.draft`, message);
+    }
+
     private constructor(
         panel: vscode.WebviewPanel,
         private readonly extensionUri: vscode.Uri,
@@ -104,6 +109,7 @@ export class SvnFolderCommitPanel {
         this.filterService = new SvnFilterService();
         this.templateManager = new TemplateManager(extensionUri);
         this.outputChannel = getOutputChannel();
+        this._currentCommitMessage = this.context.workspaceState.get<string>(`${this._getPersistentStateKey()}.draft`);
         
         this._update(true);
 
@@ -596,8 +602,7 @@ export class SvnFolderCommitPanel {
             // 后端同步移除已提交文件，保持 _fileStatuses 与列表一致
             const committedSet = new Set(files);
             this._fileStatuses = this._fileStatuses.filter(f => !committedSet.has(f.path));
-            // 提交成功后重置编辑态提交信息，避免重绘时复活旧内容
-            this._currentCommitMessage = '';
+            await this._saveCommitMessage('');
 
             appendOutput(`\n提交完成 (${files.length} 个文件)\n`);
             if (mainCommittedRevision) {
@@ -1094,8 +1099,9 @@ export class SvnFolderCommitPanel {
                         }
                         return;
                     case 'commitMessageChanged':
-                        // 同步用户当前编辑的提交信息，以便 webview 重载时保留
-                        this._currentCommitMessage = typeof message.message === 'string' ? message.message : '';
+                        if (typeof message.message === 'string') {
+                            await this._saveCommitMessage(message.message);
+                        }
                         return;
                     case 'validateCommit':
                         try {
@@ -1227,9 +1233,9 @@ export class SvnFolderCommitPanel {
                         return;
 
                     case 'refreshPanel':
-                        this._currentCommitMessage = typeof message.message === 'string'
-                            ? message.message
-                            : this._currentCommitMessage;
+                        if (typeof message.message === 'string') {
+                            await this._saveCommitMessage(message.message);
+                        }
                         try {
                             await this._update();
                         } finally {
@@ -1935,23 +1941,9 @@ export class SvnFolderCommitPanel {
         }).join('');
     }
 
-    private _getLastCommitMessage(): string {
-        const logs = this.logStorage.getLogs();
-        if (logs.length > 0) {
-            return logs[0].message.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        }
-        return '';
-    }
-
-    /**
-     * webview 重载时用于填充提交信息框的内容：
-     * 优先使用用户当前编辑的内容（避免 revert 等重绘时丢失），否则回退到上次提交日志
-     */
     private _getCommitMessageForHtml(): string {
-        if (this._currentCommitMessage !== undefined) {
-            return this._currentCommitMessage.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-        }
-        return this._getLastCommitMessage();
+        const message = this._currentCommitMessage ?? this.logStorage.getLogs()[0]?.message ?? '';
+        return message.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
     private _getHtmlForDiffView(filePath: string, diff: string): string {

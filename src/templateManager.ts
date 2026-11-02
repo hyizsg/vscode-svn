@@ -79,7 +79,7 @@ export class TemplateManager {
             // 替换自定义变量
             for (const [key, value] of Object.entries(variables)) {
                 const placeholder = `{{${key}}}`;
-                htmlContent = htmlContent.replace(new RegExp(placeholder, 'g'), value);
+                htmlContent = htmlContent.replace(new RegExp(placeholder, 'g'), () => value);
             }
 
             return htmlContent;
@@ -119,7 +119,7 @@ export class TemplateManager {
             // 替换自定义变量
             for (const [key, value] of Object.entries(variables)) {
                 const placeholder = `{{${key}}}`;
-                fullHtml = fullHtml.replace(new RegExp(placeholder, 'g'), value);
+                fullHtml = fullHtml.replace(new RegExp(placeholder, 'g'), () => value);
             }
 
             return fullHtml;
