@@ -1306,7 +1306,7 @@ async function svnRepoBrowser(folderUri?: vscode.Uri): Promise<void> {
     if (!folder && vscode.workspace.workspaceFolders?.length) folder = vscode.workspace.workspaceFolders[0].uri.fsPath;
     if (folder && await svnService.isInWorkingCopy(folder)) {
       try {
-        startUrl = await svnService.getRepoRoot(folder);
+        startUrl = await svnService.getCurrentUrl(folder);
       } catch { /* ignore */ }
     }
     if (!startUrl) {
@@ -1321,7 +1321,10 @@ async function svnRepoBrowser(folderUri?: vscode.Uri): Promise<void> {
       try {
         entries = await svnService.listRepo(currentUrl);
       } catch (error: any) {
-        vscode.window.showErrorMessage(`列出失败: ${error.message}`);
+        const hint = /E175013|E170001|forbidden|Authorization failed/i.test(error.message)
+          ? '\n当前账号没有该目录的读取权限，请检查 SVN 账号或联系管理员授权。'
+          : '';
+        vscode.window.showErrorMessage(`列出失败: ${currentUrl}\n${error.message}${hint}`);
         return;
       }
       type Item = vscode.QuickPickItem & { value: string; isDir?: boolean; isUp?: boolean; action?: string };
