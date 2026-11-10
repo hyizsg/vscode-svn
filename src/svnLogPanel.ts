@@ -504,12 +504,6 @@ export class SvnLogPanel {
         const entries: SvnLogEntry[] = [];
         
         try {
-            this._log('开始解析SVN日志XML');
-            
-            // 记录原始XML内容的一部分用于调试
-            const xmlPreview = logXml.substring(0, 500) + (logXml.length > 500 ? '...' : '');
-            this._log(`XML预览: ${xmlPreview}`);
-            
             // 使用正则表达式解析XML
             // 匹配日志条目
             const entryRegex = /<logentry\s+revision="([^"]+)">([\s\S]*?)<\/logentry>/g;
@@ -518,8 +512,6 @@ export class SvnLogPanel {
             while ((entryMatch = entryRegex.exec(logXml)) !== null) {
                 const revision = entryMatch[1];
                 const entryContent = entryMatch[2];
-                
-                this._log(`解析修订版本 ${revision} 的日志条目`);
                 
                 // 解析作者
                 const authorMatch = /<author>(.*?)<\/author>/s.exec(entryContent);
@@ -539,11 +531,7 @@ export class SvnLogPanel {
                 const pathsMatch = /<paths>([\s\S]*?)<\/paths>/s.exec(entryContent);
                 
                 if (pathsMatch) {
-                    this._log(`找到路径信息: ${revision}`);
                     const pathContent = pathsMatch[1];
-                    
-                    // 打印路径内容用于调试
-                    this._log(`路径内容: ${pathContent.substring(0, 200)}${pathContent.length > 200 ? '...' : ''}`);
                     
                     // 使用更灵活的正则表达式匹配路径
                     // 匹配任何包含action属性的path标签
@@ -551,23 +539,14 @@ export class SvnLogPanel {
                     let pathMatch;
                     
                     while ((pathMatch = pathRegex.exec(pathContent)) !== null) {
-                        const action = pathMatch[1];
-                        const pathText = pathMatch[2].trim();
-                        
-                        this._log(`找到路径: 操作=${action}, 路径=${pathText}`);
-                        
                         paths.push({
-                            action: action,
-                            path: pathText
+                            action: pathMatch[1],
+                            path: pathMatch[2].trim()
                         });
                     }
                     
-                    this._log(`解析到 ${paths.length} 个路径`);
-                    
                     // 如果没有找到路径，尝试使用更简单的正则表达式
                     if (paths.length === 0) {
-                        this._log('使用备用正则表达式解析路径');
-                        
                         // 简单匹配任何path标签
                         const simplePath = /<path[^>]*>([\s\S]*?)<\/path>/g;
                         let simpleMatch;
@@ -575,21 +554,12 @@ export class SvnLogPanel {
                         while ((simpleMatch = simplePath.exec(pathContent)) !== null) {
                             // 尝试从标签属性中提取action
                             const actionMatch = /action="([^"]+)"/.exec(simpleMatch[0]);
-                            const action = actionMatch ? actionMatch[1] : 'M'; // 默认为修改
-                            const pathText = simpleMatch[1].trim();
-                            
-                            this._log(`使用备用方法找到路径: 操作=${action}, 路径=${pathText}`);
-                            
                             paths.push({
-                                action: action,
-                                path: pathText
+                                action: actionMatch ? actionMatch[1] : 'M', // 默认为修改
+                                path: simpleMatch[1].trim()
                             });
                         }
-                        
-                        this._log(`使用备用方法解析到 ${paths.length} 个路径`);
                     }
-                } else {
-                    this._log(`未找到路径信息: ${revision}`);
                 }
                 
                 entries.push({
